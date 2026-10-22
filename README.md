@@ -35,6 +35,28 @@ The easiest way to deploy your Next.js app is to use the [Vercel Platform](https
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
 
+## Rulebook PDF Download Links
+
+Azul:
+https://cdn.1j1ju.com/medias/03/14/fd-azul-rulebook.pdf
+
+Calico:
+https://www.alderac.com/wp-content/uploads/2025/02/Calico_Rulebook.pdf
+
+Carcassonne:
+https://cundco.de/media/db/e5/fa/1715104325/cc-3-0-rules-supplemental.pdf?ts=1773928855
+
+Magic Maze:
+https://sitdown-games.com/wp-content/uploads/2018/09/MM_Rules_EN_HR_Sept2018_LD.pdf
+
+SushiGo!:
+https://gamewright.com/pdfs/Rules/SushiGoTM-RULES.pdf
+
+Ticket to Ride:
+https://cdn.svc.asmodee.net/production-daysofwonder/uploads/2025/07/7201N_TICKET2RIDEV2_RULES_EN_20250425_WEB.pdf
+
+Wizard:
+https://blog.amigo-spiele.de/content/ap/rule/06900-GB-AmigoRule.pdf
 
 ## Known Problems
 @langchain/community (used for the Chroma vector store) is deprecated and pulls in optional dependencies (@browserbasehq/stagehand, openai@4) that require zod v3, which conflicts with the project's zod v4.
