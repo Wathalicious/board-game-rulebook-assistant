@@ -44,3 +44,4 @@ next-env.d.ts
 # copyrighted rulebook PDFs and extracted text (see README for download links)
 data/rulebooks/*.pdf
 data/raw/
+data/clean/
