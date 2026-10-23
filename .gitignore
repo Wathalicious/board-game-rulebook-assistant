@@ -45,3 +45,5 @@ next-env.d.ts
 data/rulebooks/*.pdf
 data/raw/
 data/clean/
+
+chroma-data/

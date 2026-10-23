@@ -58,6 +58,39 @@ https://cdn.svc.asmodee.net/production-daysofwonder/uploads/2025/07/7201N_TICKET
 Wizard:
 https://blog.amigo-spiele.de/content/ap/rule/06900-GB-AmigoRule.pdf
 
+## Design Decisions
+
+### Chunking (`scripts/ingest.ts`)
+
+The cleaned rulebooks in `data/clean/<game>.md` use `##`/`###` headings and `<!-- page: N -->` markers.
+LangChain.js has no Markdown header splitter, so `ingest.ts` uses its own small parser:
+
+1. Walk each file line by line and cut it into **one piece per section per page**. A new heading or a
+   page change starts a new piece. Nested headings become `Section > Subsection`.
+2. Split only pieces that are too long with `RecursiveCharacterTextSplitter`.
+3. Store metadata `{ game, section, page }` with each chunk. `game` comes from the filename and is used
+   later to filter searches, so rules from different games don't get mixed up.
+4. Prefix each chunk with `<Game> - <Section>` so that the embedding also carries the context.
+   Without it, a chunk like "place it in the next free space" doesn't say which game it belongs to.
+
+**Adjusted chunk size after spot-checks.** The first version used `chunkSize: 1000, chunkOverlap: 150`
+(201 chunks). Random spot-checks showed sections that were only just over the limit and got split badly:
+
+- Calico "Cat Scoring Tiles" (1027 chars) was split into both cat tables plus a 78-character chunk
+  containing only "Shapes of the same pattern that touch each other will not attract another cat." The
+  second chunk has no cat names or table, so it is useless on its own.
+- Wizard "3. Playing Tricks" (1011 chars) was split so that "Who wins the trick?", one of the most
+  important rules, ended up separated from the first half of the section.
+
+Measured section sizes: median ~525 chars, 90th percentile ~1450, max ~2660. So the chunk size was raised to
+**`chunkSize: 1500, chunkOverlap: 200`**. About 90% of sections now stay whole, and only the really long
+ones are still split (158 chunks in total; median 573 chars, max 1528).
+Trade-off: a larger chunk covers more topics, so its embedding is a bit less precise. For rulebook sections
+that belong together, keeping them whole matters more.
+
+Remaining weakness: some chunks are very short (minimum 60 chars, e.g. a heading with one sentence). If they
+make retrieval noisy, they could be merged into the previous piece.
+
 ## Known Problems
 @langchain/community (used for the Chroma vector store) is deprecated and pulls in optional dependencies (@browserbasehq/stagehand, openai@4) that require zod v3, which conflicts with the project's zod v4.
 This is resolved with an npm overrides entry in package.json, since those packages are never used.
