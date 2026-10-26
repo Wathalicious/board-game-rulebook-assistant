@@ -1,3 +1,4 @@
+// clean markdown → chunks with metadata → embeddings → Chroma collection "rulebooks"
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { RecursiveCharacterTextSplitter } from "@langchain/textsplitters";
@@ -79,19 +80,19 @@ async function main() {
     console.log(`\nTotal: ${allChunks.length} chunks`);
     console.log(`Length min ${lengths[0]}, median ${lengths[Math.floor(lengths.length / 2 )]}, max ${lengths[lengths.length - 1]}`);
 
-     // Spot-check: a few random chunks with their metadata
+     // spot-check: a few random chunks with their metadata
     for (let i = 0; i < 3; i++) {
         const chunk = allChunks[Math.floor(Math.random() * allChunks.length)];
         console.log("\n---", chunk.metadata);
         console.log(chunk.text.slice(0, 300));
     }
 
-    // Store in Chroma: rebuild the collection from scratch on every run
+    // store in chroma: rebuild the collection from scratch on every run
     await resetCollection();
     const store = getVectorStore();
     const docs = allChunks.map((c) => new Document({ pageContent: c.text, metadata: c.metadata }));
     const ids = allChunks.map((c, i) => `${c.metadata.game}-${i}`);
-    await store.addDocuments(docs, { ids });
+    await store.addDocuments(docs, { ids }); //embeds all texts in batches (model from llm.ts), then stores them in chroma
 
     const collection = await store.ensureCollection();
     console.log(`\nStored ${await collection.count()} chunks in Chroma collection "${COLLECTION_NAME}"`);

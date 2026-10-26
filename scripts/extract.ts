@@ -1,3 +1,4 @@
+// PDF → raw text per page: data/rulebooks/*.pdf → data/raw/<game>.txt
 import { write } from "node:fs";
 import { readdir, readFile, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";

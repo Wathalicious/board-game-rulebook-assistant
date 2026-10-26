@@ -1,10 +1,11 @@
+// read-only check of what's stored in chroma: chunk count + sample chunks (no API calls, no cost)
 import { getVectorStore } from "../src/lib/vectorstore";
 
 async function main() {
     const collection = await getVectorStore().ensureCollection();
     console.log("Total chunks:", await collection.count());
 
-    // Get a few chunks of one game, filtered by metadata (no embedding involved)
+    // get a few chunks of one game, filtered by metadata (no embedding involved)
     const result = await collection.get({ where: { game: "azul" }, limit: 3 });
     result.ids.forEach((id, i) => {
         console.log("\n---", id, result.metadatas[i]);

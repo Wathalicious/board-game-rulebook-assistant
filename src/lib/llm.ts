@@ -1,3 +1,4 @@
+// model config for openrouter: embeddings (later also the chat model)
 import { OpenAIEmbeddings } from "@langchain/openai";
 
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
