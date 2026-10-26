@@ -1,6 +1,8 @@
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { RecursiveCharacterTextSplitter } from "@langchain/textsplitters";
+import { Document } from "@langchain/core/documents";
+import { COLLECTION_NAME, getVectorStore, resetCollection } from "../src/lib/vectorstore";
 
 const INPUT_DIR = "data/clean";
 
@@ -83,6 +85,16 @@ async function main() {
         console.log("\n---", chunk.metadata);
         console.log(chunk.text.slice(0, 300));
     }
+
+    // Store in Chroma: rebuild the collection from scratch on every run
+    await resetCollection();
+    const store = getVectorStore();
+    const docs = allChunks.map((c) => new Document({ pageContent: c.text, metadata: c.metadata }));
+    const ids = allChunks.map((c, i) => `${c.metadata.game}-${i}`);
+    await store.addDocuments(docs, { ids });
+
+    const collection = await store.ensureCollection();
+    console.log(`\nStored ${await collection.count()} chunks in Chroma collection "${COLLECTION_NAME}"`);
 }
 
 main().catch((err) => {
