@@ -133,6 +133,29 @@ Other findings:
 - **Metadata filter:** the `game` filter is applied inside Chroma before ranking, so the top 3 always come from
   the selected game.
 
+## Testing
+
+```bash
+npm test             # unit tests, run once (Vitest)
+npm run test:watch   # unit tests, re-run on save
+npm run typecheck    # generate Next.js route types, then tsc --noEmit
+npm run lint
+```
+
+GitHub Actions (`.github/workflows/ci.yml`) runs lint, typecheck and the unit tests on every push and pull
+request, on Node 22.
+
+**What is tested automatically, and what isn't.** Automated tests cover our own logic: the Markdown parser
+(`src/lib/chunking.test.ts`: nested headings, page changes, empty headings, Windows line endings). External
+services stay out of CI: there is no Chroma there, and running against OpenRouter would spend API credits on
+every push. Retrieval quality is checked manually with `scripts/test-retrieval.ts` (see above), because it
+needs real embeddings and is an evaluation rather than a pass/fail unit test. The agent's final answers are
+not unit-tested, because they are non-deterministic.
+
+Test files live next to the code they test (`*.test.ts`). The tests use small hand-written Markdown inputs,
+not the real rulebooks, so the expected output is known exactly and the tests don't depend on `data/clean/`
+(which is gitignored).
+
 ## Known Problems
 @langchain/community (used for the Chroma vector store) is deprecated and pulls in optional dependencies (@browserbasehq/stagehand, openai@4) that require zod v3, which conflicts with the project's zod v4.
 This is resolved with an npm overrides entry in package.json, since those packages are never used.
