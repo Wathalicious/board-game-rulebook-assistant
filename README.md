@@ -91,6 +91,48 @@ that belong together, keeping them whole matters more.
 Remaining weakness: some chunks are very short (minimum 60 chars, e.g. a heading with one sentence). If they
 make retrieval noisy, they could be merged into the previous piece.
 
+### Retrieval test (`scripts/test-retrieval.ts`)
+
+Before any LLM is involved, retrieval is tested on its own. If the chatbot gives a wrong answer later, this
+shows whether the problem is retrieval (wrong chunks) or generation (right chunks, wrong answer).
+
+```bash
+npx tsx --env-file=.env.local scripts/test-retrieval.ts
+```
+
+The script asks real rules questions per game with `similaritySearchWithScore(question, 3, { game })` and
+reports a HIT if one of the expected sections is in the top 3. The score is Chroma's squared L2 distance
+(lower = more similar). `expected` is a list, because rulebooks often state the same rule in several places:
+Carcassonne city points are explained in `Gameplay > Cities` and again in `Summary`.
+
+**Result: 10/11 questions find the right section in the top 3.**
+
+**Vocabulary mismatch.** Retrieval works well when the question uses the rulebook's vocabulary, but misses
+colloquial wording:
+
+| Question | Rank of `Game End and Final Scoring` | Best score |
+|---|---|---|
+| "Do I get points for a half-built city?" | not in top 3 | 0.888 (wrong section) |
+| "How are incomplete cities scored at the end of the game?" | 1 | 0.677 |
+
+The rulebook says "incomplete" and puts the rule under game end; the player says "half-built" and doesn't know
+where the answer lives. A manually rewritten query moved the correct section from outside the top 3 to rank 1,
+which motivates the query-translation step (rewriting questions into rulebook language before retrieval).
+The failing question stays in the test set on purpose, as a benchmark that query translation should fix.
+This miss is also dangerous: the retrieved chunks give the points for *completed* cities (2 per tile) instead
+of final scoring (1 per tile and shield), so the LLM would likely answer wrongly.
+
+Other findings:
+
+- **Weak spots:** for the Azul column bonus and the Ticket to Ride starting cards, the right section is only at
+  rank 3 or 2, with almost the same score as the sections above it.
+- **Dilution:** Carcassonne `Gameplay > Cities` is mostly about placing tiles, so its embedding barely matches
+  a scoring question.
+- **No fixed relevance threshold:** good hits range from 0.677 to 1.285, so a rule like "ignore everything above
+  1.0" would throw away correct results.
+- **Metadata filter:** the `game` filter is applied inside Chroma before ranking, so the top 3 always come from
+  the selected game.
+
 ## Known Problems
 @langchain/community (used for the Chroma vector store) is deprecated and pulls in optional dependencies (@browserbasehq/stagehand, openai@4) that require zod v3, which conflicts with the project's zod v4.
 This is resolved with an npm overrides entry in package.json, since those packages are never used.
