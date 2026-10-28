@@ -137,11 +137,38 @@ Other findings:
 
 The assistant answers rules questions; it does not keep score during a game. But many rules questions are
 scoring questions about one concrete situation: "Phil and Amy tie for second place in maki, how many points does
-each get?" Answering them needs the rule (retrieval) *and* applying it exactly, and applying it is where an LLM
-makes mistakes (splitting points, ignoring remainders, forgetting that a tie for first cancels second place).
-The score tools do that part in code.
+each get?" Answering them needs the rule (retrieval) *and* applying it exactly. The score tools do the applying
+in code: `score_sushi_go_round`, `score_sushi_go_puddings` (game end) and `score_wizard_round`.
 
-**Only for Sushi Go! and Wizard.** Tools are built where applying the rule is error-prone:
+**Baseline: the model without score tools.** The original reason for the tools was the assumption that an LLM
+gets this arithmetic wrong (splitting points, ignoring remainders, forgetting that a tie for first cancels second
+place). Before connecting the tools to the agent, this was measured with `scripts/test-agent.ts`, using new numbers
+instead of the rulebook examples (the retrieved passage already contains the answers to those):
+
+| Question | Expected | Without score tools | Time |
+|---|---|---|---|
+| Sushi Go! maki tie (Anna 4, Ben 4, Cleo 3, Dan 1) | 3 / 3 / 0 / 0, no second place | correct | 9.2 s |
+| Sushi Go! puddings, 5 players (5 / 1 / 1 / 1 / 1) | 6 / −1 / −1 / −1 / −1, remainder ignored | correct | 11.6 s |
+| Sushi Go! full round, 2 players, 6 card types | 41 / 25 | correct, with breakdown | 19.4 s |
+| Wizard (predicted→won: 0→2, 3→3, 2→1) | −20 / 50 / −10 | correct | 9.2 s |
+
+`gpt-5-mini` found the right rulebook section each time and applied the rule correctly: **4/4, so the assumption
+was not supported** (one run, two players at most for the full round).
+
+**Why the tools are kept anyway:**
+
+- **A guaranteed result instead of a probably-correct one.** The model's answers vary between runs and can't be
+  unit-tested; the score functions are tested against the rulebooks' own worked examples and always give the same
+  result.
+- **Harder cases are untested.** 5 players with full hands, or several things to compare at once, give the model
+  more room for mistakes than the 2-player round above.
+- **Structured results.** The tools return JSON, which the UI can show as a result card; free text can't be shown
+  that way.
+
+The likely cost is latency: with a tool, the agent needs an extra round (search, score tool, answer). The
+comparison run with tools is still to do.
+
+**Only for Sushi Go! and Wizard.** Tools are built where applying the rule has the most room for error:
 
 - **Sushi Go!:** 6 card types, majorities across players, ties, "ignore the remainder", negative points, a
   2-player exception and wasabi tripling (pages 3–5).
