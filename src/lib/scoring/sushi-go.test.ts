@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { scoreDumplings, scoreMaki, scoreNigiri, scorePuddings, scoreSashimi, scoreTempura } from "./sushi-go";
+import { scoreDumplings, scoreMaki, scoreNigiri, scorePuddings, scoreSashimi, scoreTempura, scoreRound } from "./sushi-go";
 
 const none = { squid: 0, salmon: 0, egg: 0 };
 
@@ -54,5 +54,25 @@ describe("scorePuddings", () => {
 
     it("ignores the remainder when splitting negative points", () => {
         expect(scorePuddings([5, 1, 1, 1, 1])).toEqual([6, -1, -1, -1, -1]);
+    });
+});
+
+describe("scoreRound", () => {
+    it("adds up all card types per player, maki compared across players", () => {
+        const players = [
+            { name: "Amy", makiIcons: 3, tempura: 2, sashimi: 3, dumplings: 2, nigiri: none, nigiriOnWasabi: { squid: 1, salmon: 0, egg: 0 } },
+            { name: "Phil", makiIcons: 1, tempura: 1, sashimi: 0, dumplings: 5, nigiri: { squid: 0, salmon: 1, egg: 1 }, nigiriOnWasabi: none },
+        ];
+        expect(scoreRound(players)).toEqual([
+            { name: "Amy", maki: 6, tempura: 5, sashimi: 10, dumplings: 3, nigiri: 9, total: 33 },
+            { name: "Phil", maki: 3, tempura: 0, sashimi: 0, dumplings: 15, nigiri: 3, total: 21 },
+        ]);
+    });
+
+    it("gives a single player no maki points, since there is nobody to compare with", () => {
+        const players = [{ name: "Amy", makiIcons: 3, tempura: 2, sashimi: 0, dumplings: 0, nigiri: none, nigiriOnWasabi: none }];
+        expect(scoreRound(players)).toEqual([
+            { name: "Amy", maki: 0, tempura: 5, sashimi: 0, dumplings: 0, nigiri: 0, total: 5 },
+        ]);
     });
 });
