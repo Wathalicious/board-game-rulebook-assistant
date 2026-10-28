@@ -133,6 +133,40 @@ Other findings:
 - **Metadata filter:** the `game` filter is applied inside Chroma before ranking, so the top 3 always come from
   the selected game.
 
+### Score tools (`src/lib/scoring/`)
+
+The assistant answers rules questions; it does not keep score during a game. But many rules questions are
+scoring questions about one concrete situation: "Phil and Amy tie for second place in maki, how many points does
+each get?" Answering them needs the rule (retrieval) *and* applying it exactly, and applying it is where an LLM
+makes mistakes (splitting points, ignoring remainders, forgetting that a tie for first cancels second place).
+The score tools do that part in code.
+
+**Only for Sushi Go! and Wizard.** Tools are built where applying the rule is error-prone:
+
+- **Sushi Go!:** 6 card types, majorities across players, ties, "ignore the remainder", negative points, a
+  2-player exception and wasabi tripling (pages 3–5).
+- **Wizard:** a rule with two cases: a correct bid scores 20 + 10 per trick, a wrong bid loses 10 per trick off
+  (page 2). Easy to mix up, e.g. points per trick won on a wrong bid, or a bid of 0.
+
+Azul end-game bonuses (+2 per row, +7 per column, +10 per colour) and Ticket to Ride route points (route length →
+points) are a simple multiplication or a single table lookup. The retrieved rulebook passage already contains the
+table, so retrieval answers them without a tool. Two fully tested tools are worth more than four shallow ones.
+Carcassonne and Calico are left out because their scoring depends on the board layout, which a player can't
+describe reliably in a chat message; Magic Maze is cooperative and has no points.
+
+**One tool per game**, not one `calculate_score` tool with a `game` parameter: each game needs completely different
+inputs (Sushi Go!: card counts of all players; Wizard: bid and tricks won). One combined schema would be easy for
+the model to fill in wrong; small tools with clear names and simple schemas are easier to pick and fill.
+
+**Logic and tool are separate.** The scoring rules are pure functions in `src/lib/scoring/<game>.ts`, unit-tested
+with the rulebooks' own worked examples (e.g. the maki example on page 3 and the pudding example on page 5). They
+need no LLM, API key or Chroma, so they run in CI. The tool in `src/lib/tools/` is only a thin wrapper (zod schema +
+description). Adding another game means one scoring file, one test file and one wrapper.
+
+**Interpretation where the rulebook is silent:** Sushi Go! doesn't say whether players with 0 maki icons can take
+second place (e.g. 3 / 0 / 0). We decided that 0 icons scores no maki points, since having none isn't "having the
+second most".
+
 ## Testing
 
 ```bash
@@ -146,15 +180,20 @@ GitHub Actions (`.github/workflows/ci.yml`) runs lint, typecheck and the unit te
 request, on Node 22.
 
 **What is tested automatically, and what isn't.** Automated tests cover our own logic: the Markdown parser
-(`src/lib/chunking.test.ts`: nested headings, page changes, empty headings, Windows line endings). External
+(`src/lib/chunking.test.ts`: nested headings, page changes, empty headings, Windows line endings) and the score
+functions (`src/lib/scoring/*.test.ts`). The score tests use the rulebooks' own worked examples as test cases
+(Sushi Go! maki on page 3 and puddings on page 5, Wizard on page 2), plus edge cases such as ties, remainders
+and the 2-player pudding rule. If the code agrees with the publisher's examples, the rule is implemented
+correctly. External
 services stay out of CI: there is no Chroma there, and running against OpenRouter would spend API credits on
 every push. Retrieval quality is checked manually with `scripts/test-retrieval.ts` (see above), because it
 needs real embeddings and is an evaluation rather than a pass/fail unit test. The agent's final answers are
 not unit-tested, because they are non-deterministic.
 
-Test files live next to the code they test (`*.test.ts`). The tests use small hand-written Markdown inputs,
-not the real rulebooks, so the expected output is known exactly and the tests don't depend on `data/clean/`
-(which is gitignored).
+Test files live next to the code they test (`*.test.ts`). The parser tests use small hand-written Markdown
+inputs, not the real rulebooks, so the expected output is known exactly and the tests don't depend on
+`data/clean/` (which is gitignored). The score tests only contain numbers, so they don't need `data/clean/`
+either.
 
 ## Known Problems
 @langchain/community (used for the Chroma vector store) is deprecated and pulls in optional dependencies (@browserbasehq/stagehand, openai@4) that require zod v3, which conflicts with the project's zod v4.
