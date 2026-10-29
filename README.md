@@ -37,6 +37,12 @@ Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/bui
 
 ## Rulebook PDF Download Links
 
+The cleaned Markdown rulebooks in `data/clean/` are in the repository. They are the knowledge base:
+`scripts/ingest.ts` reads only these files, so running it rebuilds the Chroma collection without the PDFs. The
+PDFs (`data/rulebooks/`) and the raw extracted text (`data/raw/`) are not committed; they are only needed to redo
+the extraction with `scripts/extract.ts`. The Markdown files were cleaned up by hand from the raw text, so they
+can't be regenerated exactly from it.
+
 Azul:
 https://cdn.1j1ju.com/medias/03/14/fd-azul-rulebook.pdf
 
@@ -218,9 +224,9 @@ needs real embeddings and is an evaluation rather than a pass/fail unit test. Th
 not unit-tested, because they are non-deterministic.
 
 Test files live next to the code they test (`*.test.ts`). The parser tests use small hand-written Markdown
-inputs, not the real rulebooks, so the expected output is known exactly and the tests don't depend on
-`data/clean/` (which is gitignored). The score tests only contain numbers, so they don't need `data/clean/`
-either.
+inputs, not the real rulebooks in `data/clean/`: each input covers exactly one case (e.g. a page change inside
+a section), so the expected output is known exactly, and editing a rulebook file can't break a parser test.
+The score tests only contain numbers.
 
 ## Known Problems
 @langchain/community (used for the Chroma vector store) is deprecated and pulls in optional dependencies (@browserbasehq/stagehand, openai@4) that require zod v3, which conflicts with the project's zod v4.
