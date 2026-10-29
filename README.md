@@ -1,39 +1,60 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Board Game Rulebook Assistant
 
-## Getting Started
+A chat assistant for the rules of seven board games (Azul, Calico, Carcassonne, Magic Maze, Sushi Go!, Ticket to
+Ride, Wizard), meant for use at the table during a game. It answers only from the official rulebooks and cites the
+page. Besides rules questions it calculates Sushi Go! and Wizard scores, lists the setup for a given player count,
+and suggests which of the seven games fits a group.
 
-First, run the development server:
+## How it works
+
+- **RAG over the rulebooks.** The rulebook PDFs were extracted and cleaned into Markdown (`data/clean/`), split
+  into chunks per section and page, embedded and stored in ChromaDB. A question is answered from the retrieved
+  passages only, never from the model's own knowledge of the games.
+- **An agent with tools.** A LangChain.js agent (`src/lib/agent.ts`) with `gpt-5-mini` via OpenRouter decides which
+  tools to call: `search_rulebook` (retrieval), three score tools (Sushi Go! round, Sushi Go! puddings, Wizard round),
+  `get_player_count_setup` and `pick_games`. The tool logic is plain TypeScript in `src/lib/` and unit-tested.
+- **Next.js app.** The agent runs on the server in a route handler (`POST /api/chat`), so the API key never reaches
+  the browser. The page is a chat UI with the seven game tiles, tool-result cards and a source list.
+
+## Setup
+
+Requirements: Node 22, Docker, an [OpenRouter](https://openrouter.ai) API key.
+
+```bash
+npm install
+```
+
+Create `.env.local` in the project root:
+
+```
+OPENROUTER_API_KEY=sk-or-...
+CHROMA_URL=http://localhost:8000   # optional, this is the default
+```
+
+Start ChromaDB and fill it with the rulebook chunks (the `chroma-data/` volume keeps the embeddings between runs):
+
+```bash
+docker run -p 8000:8000 -v ./chroma-data:/data chromadb/chroma
+npx tsx --env-file=.env.local scripts/ingest.ts      # data/clean/*.md → 158 chunks → Chroma collection "rulebooks"
+```
+
+Run the app:
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000), click a game tile or just type a question.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Scripts (all run with `npx tsx --env-file=.env.local scripts/<name>.ts`):
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+| Script | Purpose |
+|---|---|
+| `extract.ts` | PDFs in `data/rulebooks/` → raw text in `data/raw/` (only needed to redo the extraction) |
+| `ingest.ts` | cleaned Markdown → chunks → embeddings → Chroma |
+| `peek.ts` | shows a few stored chunks with their metadata |
+| `test-search-tool.ts` | calls the search tool directly, no LLM |
+| `test-retrieval.ts`, `test-agent.ts` | evaluation runs, see [Evaluation](#evaluation) |
 
 ## Rulebook PDF Download Links
 
@@ -201,6 +222,32 @@ the game boxes and noted in the code:
 The Wizard rulebook gives one play time for every player count. Times per player count found online had no
 source, so the rulebook's value is used.
 
+### Chat UI (`src/app/`)
+
+The app is a single chat page for desktop use at the game table: dark green ground, bright purple accent,
+frosted-glass panels (`src/app/globals.css`). The agent runs on the server behind `POST /api/chat`; the page is a
+client component (`src/app/components/chat.tsx`) that keeps the conversation in React state.
+
+- **Game tiles instead of a dropdown.** The start screen shows the seven box covers as glass tiles
+  (`public/tiles/`, square crops). A dropdown can be forgotten or contradict the question (dropdown on Azul,
+  question about Wizard: which one wins?), and game-picker questions have no game at all. A tile is only a
+  shortcut: clicking it puts "Azul: " into the input, and the tile counts as selected exactly while the input starts
+  with that prefix. The conversation text is the only thing sent to the agent, so the UI can never disagree with
+  the request. Typing without a tile works the same way, and the agent asks which game is meant when the question
+  doesn't say. The tiles disappear once the chat starts; "New chat" brings them back.
+- **Conversation with history.** The request is `{ messages: [{ role: "user" | "assistant", content }] }`: the
+  whole conversation, text only. The route turns it into Human/AI messages for the agent, so follow-up questions
+  ("and what about puddings?") keep the game. Earlier tool calls are not replayed; the sources and tool results
+  always belong to the current answer.
+- **Response: `{ answer, sources, toolResults }`.** `search_rulebook` returns its passages with
+  `responseFormat: "content_and_artifact"`: the text goes to the model unchanged, and the artifact holds
+  `{ game, section, page }` per passage. The other tools' JSON results are paired with the arguments they were
+  called with. A pure function (`src/lib/chat-response.ts`) turns the agent's message list into this response, so
+  the extraction is unit-tested without an LLM.
+- **Under each answer:** one card per tool result (score tables, setup facts with pages, picked games) and a
+  collapsed "Sources" list with game, section and page, so the answer stays short and the evidence is one click
+  away. A "Searching the rulebook…" indicator covers the wait; answers are not streamed (see Known Problems).
+
 ## Testing
 
 ```bash
@@ -224,7 +271,10 @@ routes, solo modes), unsupported player counts, and the setup data itself (e.g. 
 game doesn't support). The game picker tests (`src/lib/game-picker.test.ts`) check each filter on its own and
 combined, the edges (a 20-minute game fits into 20 minutes, a 14+ game fits a 14-year-old but not a 13-year-old)
 and an empty result. The tool wrappers are tested for their JSON output and for rejecting invalid input
-(`src/lib/tools/*.test.ts`). External
+(`src/lib/tools/*.test.ts`). The chat response extraction (`src/lib/chat-response.test.ts`) is tested with
+hand-built agent message lists: answer from the last AI message, deduplicated sources from the search tool's
+artifact, tool results paired with their call arguments, and the edge cases (no tool calls, non-JSON result,
+missing artifact). External
 services stay out of CI: there is no Chroma there, and running against OpenRouter would spend API credits on
 every push. Retrieval quality and the agent's answers are checked with two evaluation scripts instead (see
 [Evaluation](#evaluation)): they need real embeddings, a running Chroma and API credits, and the agent's answers
@@ -360,3 +410,6 @@ Answers are slow for use in the middle of a game: about 7–27 s per question (s
 answer), three when a score tool is used after the search. Not optimised for lack of time; possible improvements
 are a lower reasoning effort, a faster model (a one-line change in `src/lib/llm.ts`, since OpenRouter serves many
 models), and shorter tool output.
+
+Answers are not streamed: the UI shows a "Searching the rulebook…" indicator and then the whole answer. Streaming
+would need a streaming route handler and client; left out for time, since the answers are short.
