@@ -40,6 +40,19 @@ const QUESTIONS: TestQuestion[] = [
         expected: "Anna -20, Ben 50, Cleo -10",
         tools: ["search_rulebook", "score_wizard_round"],
     },
+    // setup questions with a player count: rulebook search + setup helper
+    {
+        label: "Azul setup, 3 players",
+        question: "We're setting up Azul for 3 players. How many factory displays do we need?",
+        expected: "7 factory displays, 4 tiles on each (page 2)",
+        tools: ["search_rulebook", "get_player_count_setup"],
+    },
+    {
+        label: "Wizard rounds, 5 players",
+        question: "We play Wizard with 5 players. How many rounds do we play?",
+        expected: "12 rounds (page 2)",
+        tools: ["search_rulebook", "get_player_count_setup"],
+    },
     // regression: plain rules questions from step 6, must still work with the score tools connected
     {
         label: "Carcassonne half-built city",

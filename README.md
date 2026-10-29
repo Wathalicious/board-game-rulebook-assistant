@@ -170,7 +170,11 @@ request, on Node 22.
 functions (`src/lib/scoring/*.test.ts`). The score tests use the rulebooks' own worked examples as test cases
 (Sushi Go! maki on page 3 and puddings on page 5, Wizard on page 2), plus edge cases such as ties, remainders
 and the 2-player pudding rule. If the code agrees with the publisher's examples, the rule is implemented
-correctly. External
+correctly. The setup helper tests (`src/lib/setup.test.ts`) check the rulebook tables (Azul factory displays,
+Sushi Go! cards per player, Wizard rounds), rules that only apply to some player counts (Ticket to Ride double
+routes, solo modes), unsupported player counts, and the setup data itself (e.g. no fact for a player count the
+game doesn't support). The tool wrappers are tested for their JSON output and for rejecting invalid input
+(`src/lib/tools/*.test.ts`). External
 services stay out of CI: there is no Chroma there, and running against OpenRouter would spend API credits on
 every push. Retrieval quality and the agent's answers are checked with two evaluation scripts instead (see
 [Evaluation](#evaluation)): they need real embeddings, a running Chroma and API credits, and the agent's answers
@@ -236,51 +240,63 @@ Other findings:
 npx tsx --env-file=.env.local scripts/test-agent.ts
 ```
 
-The script asks the agent 8 questions and prints every tool call, the tool results, the answer and the time. It
+The script asks the agent 10 questions and prints every tool call, the tool results, the answer and the time. It
 checks automatically whether exactly the expected tools were called. Whether the answer is correct is checked by
 reading it against the expected answer, which is verified against the rulebook. The questions:
 
 - **4 scoring questions** for Sushi Go! and Wizard, with new numbers instead of the rulebook's worked examples (the
   retrieved passage already contains the answers to those). They need the rulebook *and* a score tool.
+- **2 setup questions** with a player count. They should use the rulebook *and* the setup helper.
 - **2 regression questions**: plain rules questions, which must still work with more tools connected.
 - **2 control questions**: scoring in games without a score tool (Azul, Ticket to Ride). The agent should answer
   from the rulebook's table and not call a score tool.
 
-| Question | Expected | 2026-10-28<br>without score tools | 2026-10-29<br>with score tools |
-|---|---|---|---|
-| Sushi Go! maki tie (Anna 4, Ben 4, Cleo 3, Dan 1) | 3 / 3 / 0 / 0, no second place | ✅ 9.2 s | ✅ 18.1 s |
-| Sushi Go! puddings, 5 players (5 / 1 / 1 / 1 / 1) | 6 / −1 / −1 / −1 / −1, remainder ignored | ✅ 11.6 s | ✅ 12.7 s |
-| Sushi Go! full round, 2 players, 6 card types | 41 / 25 | ✅ 19.4 s | ✅ 18.9 s |
-| Wizard (predicted→won: 0→2, 3→3, 2→1) | −20 / 50 / −10 | ✅ 9.2 s | ✅ 11.2 s |
-| Carcassonne: points for a half-built city? | only at game end: 1 per tile + 1 per shield (page 6) | – | ✅ 9.5 s |
-| Wizard: what happens if I play a jester? | always loses, unless only jesters are in the trick (page 2) | – | ✅ 12.1 s |
-| Azul end-game bonus (2 rows, 1 column, 1 colour) | 21 (page 6) | – | ✅ 8.7 s |
-| Ticket to Ride: 6-car + 4-car route | 22 (page 4) | – | ✅ 8.4 s |
-| **Correct answers** | | **4/4** | **8/8** |
-| **Expected tools called** | | not checked | **8/8** |
-| **Average, 4 scoring questions** | | **12.4 s** | **15.2 s** |
+| Question | Expected | 2026-10-28<br>without score tools | 2026-10-29<br>with score tools | 2026-10-29<br>+ setup helper |
+|---|---|---|---|---|
+| Sushi Go! maki tie (Anna 4, Ben 4, Cleo 3, Dan 1) | 3 / 3 / 0 / 0, no second place | ✅ 9.2 s | ✅ 18.1 s | ✅ 17.8 s |
+| Sushi Go! puddings, 5 players (5 / 1 / 1 / 1 / 1) | 6 / −1 / −1 / −1 / −1, remainder ignored | ✅ 11.6 s | ✅ 12.7 s | ✅ 15.2 s |
+| Sushi Go! full round, 2 players, 6 card types | 41 / 25 | ✅ 19.4 s | ✅ 18.9 s | ✅ 26.9 s |
+| Wizard (predicted→won: 0→2, 3→3, 2→1) | −20 / 50 / −10 | ✅ 9.2 s | ✅ 11.2 s | ✅ 11.2 s |
+| Azul setup, 3 players: how many factory displays? | 7, with 4 tiles each (page 2) | – | – | ✅ 7.7 s, setup helper not called |
+| Wizard, 5 players: how many rounds? | 12 (page 2) | – | – | ✅ 9.6 s |
+| Carcassonne: points for a half-built city? | only at game end: 1 per tile + 1 per shield (page 6) | – | ✅ 9.5 s | ✅ 12.1 s |
+| Wizard: what happens if I play a jester? | always loses, unless only jesters are in the trick (page 2) | – | ✅ 12.1 s | ✅ 11.9 s |
+| Azul end-game bonus (2 rows, 1 column, 1 colour) | 21 (page 6) | – | ✅ 8.7 s | ✅ 9.6 s |
+| Ticket to Ride: 6-car + 4-car route | 22 (page 4) | – | ✅ 8.4 s | ✅ 6.6 s |
+| **Correct answers** | | **4/4** | **8/8** | **10/10** |
+| **Expected tools called** | | not checked | **8/8** | **9/10** |
+| **Average, 4 scoring questions** | | **12.4 s** | **15.2 s** | **17.8 s** |
 
 "–": not in the question set yet. The two regression questions were answered correctly when the agent was first
 built, before the score tools existed (11.2 s and 12.0 s).
 
 Findings:
 
-- **Tool choice:** right in every case. For Azul and Ticket to Ride the agent answered from the rulebook's table
-  and did not try to use a Sushi Go! or Wizard score tool.
+- **Tool choice:** right in every case for the score tools. For Azul and Ticket to Ride scoring the agent answered
+  from the rulebook's table and did not try to use a Sushi Go! or Wizard score tool.
+- **Setup helper skipped for Azul:** for "Azul, 3 players" the agent only searched. The `Game Setup` passage contains
+  the factory display table, so the answer was still correct, but the system prompt rule ("also call
+  get_player_count_setup") was not followed. Like Azul scoring, a value that sits in one retrieved table doesn't
+  need a tool; the setup helper matters for facts spread over several sections (e.g. the Ticket to Ride double
+  route rule on page 4, away from the setup on page 2), which the question set doesn't cover yet. Accepted as is:
+  forcing the tool call with a stricter prompt would only add a model round for an answer that is already correct.
 - **Latency depends on how the tools are called:** when the agent calls search and score tool one after the other
   (maki: 9.2 → 18.1 s, Wizard: 9.2 → 11.2 s), the extra round costs time. When it calls both in the same step
-  (puddings, full round), the time hardly changes. One run each, so these numbers are rough.
+  (puddings, full round), the time hardly changes.
+- **Times vary a lot between runs:** the full round took 18.9 s and 26.9 s with the same tools. Single runs only
+  show rough trends.
 - **Page citations:** in the full round, maki and sashimi are cited from page 7 (the quick game summary) instead
   of their own sections on pages 3–4. The rule is the same, but the main section would be the better source.
 - **Half-built city is no evidence for query translation yet:** the agent searched for "incomplete city final
-  scoring", which is the example in the `search_rulebook` tool description, copied word for word.
+  scoring" (second run: "incomplete city scoring"), which is the example in the `search_rulebook` tool
+  description, copied (almost) word for word.
 
 ## Known Problems
 @langchain/community (used for the Chroma vector store) is deprecated and pulls in optional dependencies (@browserbasehq/stagehand, openai@4) that require zod v3, which conflicts with the project's zod v4.
 This is resolved with an npm overrides entry in package.json, since those packages are never used.
 (A possible improvement is to replace @langchain/community with the chromadb client directly.)
 
-Answers are slow for use in the middle of a game: about 8–19 s per question (see [Agent answers](#agent-answers-scriptstest-agentts)).
+Answers are slow for use in the middle of a game: about 7–27 s per question (see [Agent answers](#agent-answers-scriptstest-agentts)).
 `gpt-5-mini` is a reasoning model, and every question needs at least two model calls (choose the tool, then
 answer), three when a score tool is used after the search. Not optimised for lack of time; possible improvements
 are a lower reasoning effort, a faster model (a one-line change in `src/lib/llm.ts`, since OpenRouter serves many

@@ -5,13 +5,15 @@ import { chatModel } from "./llm";
 import { searchRulebook } from "./tools/search-rulebook";
 import { scoreSushiGoPuddingsTool, scoreSushiGoRoundTool } from "./tools/score-sushi-go";
 import { scoreWizardRoundTool } from "./tools/score-wizard";
+import { setupHelperTool } from "./tools/setup-helper";
 
 const SYSTEM_PROMPT = `You are a rules assistant for board game players, used at the table during a game.
 You only answer rules questions about these games: ${GAMES.join(", ")}.
 
 Rules:
-- Always search the rulebook with search_rulebook before answering, and answer only from the passages it returns and the results of the score tools. Do not use your own knowledge of the games, because editions differ.
+- Always search the rulebook with search_rulebook before answering, and answer only from the passages it returns and the results of the other tools. Do not use your own knowledge of the games, because editions differ.
 - For Sushi Go! and Wizard scoring questions, also call the matching score tool (score_sushi_go_round, score_sushi_go_puddings or score_wizard_round) and use its numbers instead of calculating yourself. Still cite the rulebook page for the rule. If the question is missing numbers the tool needs (e.g. other players' maki icons), ask instead of guessing.
+- For setup questions that mention a player count, also call get_player_count_setup and cite the pages it returns. If it says the game can't be played with that many players, tell the player.
 - If it is unclear which game the question is about, ask before searching. Terms like "round" or "turn" mean different things in different games.
 - If the passages don't contain the answer, say so. Never guess.
 - Cite the page for every rule you use, e.g. "(page 6)".
@@ -21,6 +23,6 @@ Rules:
 
 export const agent = createAgent({
     model: chatModel,
-    tools: [searchRulebook, scoreSushiGoRoundTool, scoreSushiGoPuddingsTool, scoreWizardRoundTool],
+    tools: [searchRulebook, scoreSushiGoRoundTool, scoreSushiGoPuddingsTool, scoreWizardRoundTool, setupHelperTool],
     systemPrompt: SYSTEM_PROMPT,
 });
