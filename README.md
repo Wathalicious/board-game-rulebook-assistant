@@ -153,6 +153,54 @@ description). Adding another game means one scoring file, one test file and one 
 second place (e.g. 3 / 0 / 0). We decided that 0 icons scores no maki points, since having none isn't "having the
 second most".
 
+### Setup helper (`src/lib/setup.ts`)
+
+The tool `get_player_count_setup` returns the setup facts that change with the number of players, each with its
+rulebook page, e.g. "Azul, 3 players" → 7 Factory displays (page 2). For a player count the game doesn't support it
+returns a message instead ("azul is for 2-4 players."), which the agent passes on to the player.
+
+**Why a tool and not only retrieval:** player-count rules are often spread over several sections. Ticket to Ride
+explains the setup on page 2, but the rule that only one route of a double route can be claimed with 2 or 3 players
+is on page 4, under claiming routes. Wizard lists the number of rounds per player count under "End of the Game", and
+the Sushi Go! 2-player pudding rule is under puddings. A search for "setup for 3 players" doesn't reliably return
+all of these; the tool collects them in one checked place and returns JSON for the UI. Where one retrieved table
+already holds the answer (Azul factory displays), retrieval alone is enough, and the agent sometimes skips the tool
+(see [Evaluation](#agent-answers-scriptstest-agentts)). The general setup steps still come from retrieval.
+
+**Data, not code per game:** `SETUP` holds, per game, the player range and a list of facts. A fact without a
+`players` list applies to every player count; with one, only to those counts (e.g. the Magic Maze solo deck only for
+1 player). Adding a fact is one line of data; `getSetup` only filters the list. `Record<Game, GameSetup>` makes
+TypeScript report an error if a game in `GAMES` has no entry.
+
+### Game picker (`src/lib/game-picker.ts`)
+
+The tool `pick_games` answers "which game can we play?": it filters the 7 games by number of players, age of the
+youngest player and available play time. All filters are optional; an empty list means no game fits. This can't be
+answered by retrieval: every search is filtered to one game, and not every rulebook states its player count.
+
+- **Player count** comes from the setup helper's `SETUP`, so the player ranges exist in one place only.
+- **Play time:** a game counts as fitting only if the *upper* value from the box fits (Ticket to Ride, 30–60
+  minutes, doesn't fit into 45). Box times are rough, so the filter errs on the safe side.
+- **Complexity is not included.** No rulebook rates it, and the available proxies were rejected: the age on the box
+  also reflects reading, small parts and theme, not only difficulty, and a personal rating would be an opinion. The
+  age is used as what it is, a filter for the youngest player.
+
+**Data sources.** The tools' numbers come from the rulebooks wherever the rulebook states them; the rest is printed on
+the game boxes and noted in the code:
+
+| Game | Players | Age | Play time |
+|---|---|---|---|
+| Azul | 2–4 (setup table, p. 2) | 8+ (box) | 30–45 min (box) |
+| Calico | 1–4 (p. 2) | 14+ (p. 2) | 30–45 min (box) |
+| Carcassonne | 2–5 (box; not in the rulebook) | 8+ (box) | 30–45 min (box) |
+| Magic Maze | 1–8 (components, p. 3) | 8+ (box) | 3–15 min (box) |
+| Sushi Go! | 2–5 (setup table, p. 2) | 8+ (box) | 20 min (box) |
+| Ticket to Ride | 2–5 (p. 1) | 8+ (p. 1) | 30–60 min (p. 1) |
+| Wizard | 3–6 (p. 1) | 10+ (p. 1) | about 45 min (p. 1) |
+
+The Wizard rulebook gives one play time for every player count. Times per player count found online had no
+source, so the rulebook's value is used.
+
 ## Testing
 
 ```bash
@@ -173,7 +221,9 @@ and the 2-player pudding rule. If the code agrees with the publisher's examples,
 correctly. The setup helper tests (`src/lib/setup.test.ts`) check the rulebook tables (Azul factory displays,
 Sushi Go! cards per player, Wizard rounds), rules that only apply to some player counts (Ticket to Ride double
 routes, solo modes), unsupported player counts, and the setup data itself (e.g. no fact for a player count the
-game doesn't support). The tool wrappers are tested for their JSON output and for rejecting invalid input
+game doesn't support). The game picker tests (`src/lib/game-picker.test.ts`) check each filter on its own and
+combined, the edges (a 20-minute game fits into 20 minutes, a 14+ game fits a 14-year-old but not a 13-year-old)
+and an empty result. The tool wrappers are tested for their JSON output and for rejecting invalid input
 (`src/lib/tools/*.test.ts`). External
 services stay out of CI: there is no Chroma there, and running against OpenRouter would spend API credits on
 every push. Retrieval quality and the agent's answers are checked with two evaluation scripts instead (see
@@ -240,32 +290,36 @@ Other findings:
 npx tsx --env-file=.env.local scripts/test-agent.ts
 ```
 
-The script asks the agent 10 questions and prints every tool call, the tool results, the answer and the time. It
+The script asks the agent 12 questions and prints every tool call, the tool results, the answer and the time. It
 checks automatically whether exactly the expected tools were called. Whether the answer is correct is checked by
 reading it against the expected answer, which is verified against the rulebook. The questions:
 
 - **4 scoring questions** for Sushi Go! and Wizard, with new numbers instead of the rulebook's worked examples (the
   retrieved passage already contains the answers to those). They need the rulebook *and* a score tool.
 - **2 setup questions** with a player count. They should use the rulebook *and* the setup helper.
+- **2 game picker questions** ("which game can we play?"). They are not rules questions, so only the game picker
+  should be called, without a rulebook search.
 - **2 regression questions**: plain rules questions, which must still work with more tools connected.
 - **2 control questions**: scoring in games without a score tool (Azul, Ticket to Ride). The agent should answer
   from the rulebook's table and not call a score tool.
 
-| Question | Expected | 2026-10-28<br>without score tools | 2026-10-29<br>with score tools | 2026-10-29<br>+ setup helper |
-|---|---|---|---|---|
-| Sushi Go! maki tie (Anna 4, Ben 4, Cleo 3, Dan 1) | 3 / 3 / 0 / 0, no second place | ✅ 9.2 s | ✅ 18.1 s | ✅ 17.8 s |
-| Sushi Go! puddings, 5 players (5 / 1 / 1 / 1 / 1) | 6 / −1 / −1 / −1 / −1, remainder ignored | ✅ 11.6 s | ✅ 12.7 s | ✅ 15.2 s |
-| Sushi Go! full round, 2 players, 6 card types | 41 / 25 | ✅ 19.4 s | ✅ 18.9 s | ✅ 26.9 s |
-| Wizard (predicted→won: 0→2, 3→3, 2→1) | −20 / 50 / −10 | ✅ 9.2 s | ✅ 11.2 s | ✅ 11.2 s |
-| Azul setup, 3 players: how many factory displays? | 7, with 4 tiles each (page 2) | – | – | ✅ 7.7 s, setup helper not called |
-| Wizard, 5 players: how many rounds? | 12 (page 2) | – | – | ✅ 9.6 s |
-| Carcassonne: points for a half-built city? | only at game end: 1 per tile + 1 per shield (page 6) | – | ✅ 9.5 s | ✅ 12.1 s |
-| Wizard: what happens if I play a jester? | always loses, unless only jesters are in the trick (page 2) | – | ✅ 12.1 s | ✅ 11.9 s |
-| Azul end-game bonus (2 rows, 1 column, 1 colour) | 21 (page 6) | – | ✅ 8.7 s | ✅ 9.6 s |
-| Ticket to Ride: 6-car + 4-car route | 22 (page 4) | – | ✅ 8.4 s | ✅ 6.6 s |
-| **Correct answers** | | **4/4** | **8/8** | **10/10** |
-| **Expected tools called** | | not checked | **8/8** | **9/10** |
-| **Average, 4 scoring questions** | | **12.4 s** | **15.2 s** | **17.8 s** |
+| Question | Expected | 2026-10-28<br>without score tools | 2026-10-29<br>with score tools | 2026-10-29<br>+ setup helper | 2026-10-29<br>+ game picker |
+|---|---|---|---|---|---|
+| Sushi Go! maki tie (Anna 4, Ben 4, Cleo 3, Dan 1) | 3 / 3 / 0 / 0, no second place | ✅ 9.2 s | ✅ 18.1 s | ✅ 17.8 s | ✅ 16.9 s |
+| Sushi Go! puddings, 5 players (5 / 1 / 1 / 1 / 1) | 6 / −1 / −1 / −1 / −1, remainder ignored | ✅ 11.6 s | ✅ 12.7 s | ✅ 15.2 s | ✅ 12.3 s |
+| Sushi Go! full round, 2 players, 6 card types | 41 / 25 | ✅ 19.4 s | ✅ 18.9 s | ✅ 26.9 s | ✅ 26.4 s |
+| Wizard (predicted→won: 0→2, 3→3, 2→1) | −20 / 50 / −10 | ✅ 9.2 s | ✅ 11.2 s | ✅ 11.2 s | ✅ 12.5 s |
+| Azul setup, 3 players: how many factory displays? | 7, with 4 tiles each (page 2) | – | – | ✅ 7.7 s, setup helper not called | ✅ 15.5 s |
+| Wizard, 5 players: how many rounds? | 12 (page 2) | – | – | ✅ 9.6 s | ✅ 10.6 s |
+| Picker: 5 players, about half an hour | Magic Maze, Sushi Go! | – | – | – | ✅ 10.6 s |
+| Picker: 3 players incl. a 9-year-old | Azul, Carcassonne, Magic Maze, Sushi Go!, Ticket to Ride | – | – | – | ✅ 9.8 s |
+| Carcassonne: points for a half-built city? | only at game end: 1 per tile + 1 per shield (page 6) | – | ✅ 9.5 s | ✅ 12.1 s | ✅ 9.0 s |
+| Wizard: what happens if I play a jester? | always loses, unless only jesters are in the trick (page 2) | – | ✅ 12.1 s | ✅ 11.9 s | ✅ 10.4 s |
+| Azul end-game bonus (2 rows, 1 column, 1 colour) | 21 (page 6) | – | ✅ 8.7 s | ✅ 9.6 s | ✅ 9.2 s |
+| Ticket to Ride: 6-car + 4-car route | 22 (page 4) | – | ✅ 8.4 s | ✅ 6.6 s | ✅ 6.8 s |
+| **Correct answers** | | **4/4** | **8/8** | **10/10** | **12/12** |
+| **Expected tools called** | | not checked | **8/8** | **9/10** | **12/12** |
+| **Average, 4 scoring questions** | | **12.4 s** | **15.2 s** | **17.8 s** | **17.0 s** |
 
 "–": not in the question set yet. The two regression questions were answered correctly when the agent was first
 built, before the score tools existed (11.2 s and 12.0 s).
@@ -280,6 +334,11 @@ Findings:
   need a tool; the setup helper matters for facts spread over several sections (e.g. the Ticket to Ride double
   route rule on page 4, away from the setup on page 2), which the question set doesn't cover yet. Accepted as is:
   forcing the tool call with a stricter prompt would only add a model round for an answer that is already correct.
+  In the next run the agent did call the setup helper for the same question (15.5 s instead of 7.7 s): tool choice
+  itself varies between runs.
+- **Game picker:** both questions called only `pick_games`, without a rulebook search, and listed exactly the
+  fitting games with "according to the box". The 9-year-old answer added its own suggestions afterwards ("a
+  longer, family-friendly route/strategy game"), which go slightly beyond the tool's data.
 - **Latency depends on how the tools are called:** when the agent calls search and score tool one after the other
   (maki: 9.2 → 18.1 s, Wizard: 9.2 → 11.2 s), the extra round costs time. When it calls both in the same step
   (puddings, full round), the time hardly changes.

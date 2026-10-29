@@ -53,6 +53,19 @@ const QUESTIONS: TestQuestion[] = [
         expected: "12 rounds (page 2)",
         tools: ["search_rulebook", "get_player_count_setup"],
     },
+    // game picker: no rules question, so no rulebook search expected
+    {
+        label: "Picker: 5 players, half an hour",
+        question: "We are 5 players and have about half an hour. Which game can we play?",
+        expected: "Magic Maze (3-15 min) and Sushi Go! (20 min), according to the box",
+        tools: ["pick_games"],
+    },
+    {
+        label: "Picker: 3 players with a 9-year-old",
+        question: "There are 3 of us, including our 9-year-old. What can we play?",
+        expected: "Azul, Carcassonne, Magic Maze, Sushi Go!, Ticket to Ride (not Calico 14+, not Wizard 10+)",
+        tools: ["pick_games"],
+    },
     // regression: plain rules questions from step 6, must still work with the score tools connected
     {
         label: "Carcassonne half-built city",
