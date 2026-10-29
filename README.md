@@ -97,48 +97,6 @@ that belong together, keeping them whole matters more.
 Remaining weakness: some chunks are very short (minimum 60 chars, e.g. a heading with one sentence). If they
 make retrieval noisy, they could be merged into the previous piece.
 
-### Retrieval test (`scripts/test-retrieval.ts`)
-
-Before any LLM is involved, retrieval is tested on its own. If the chatbot gives a wrong answer later, this
-shows whether the problem is retrieval (wrong chunks) or generation (right chunks, wrong answer).
-
-```bash
-npx tsx --env-file=.env.local scripts/test-retrieval.ts
-```
-
-The script asks real rules questions per game with `similaritySearchWithScore(question, 3, { game })` and
-reports a HIT if one of the expected sections is in the top 3. The score is Chroma's squared L2 distance
-(lower = more similar). `expected` is a list, because rulebooks often state the same rule in several places:
-Carcassonne city points are explained in `Gameplay > Cities` and again in `Summary`.
-
-**Result: 10/11 questions find the right section in the top 3.**
-
-**Vocabulary mismatch.** Retrieval works well when the question uses the rulebook's vocabulary, but misses
-colloquial wording:
-
-| Question | Rank of `Game End and Final Scoring` | Best score |
-|---|---|---|
-| "Do I get points for a half-built city?" | not in top 3 | 0.888 (wrong section) |
-| "How are incomplete cities scored at the end of the game?" | 1 | 0.677 |
-
-The rulebook says "incomplete" and puts the rule under game end; the player says "half-built" and doesn't know
-where the answer lives. A manually rewritten query moved the correct section from outside the top 3 to rank 1,
-which motivates the query-translation step (rewriting questions into rulebook language before retrieval).
-The failing question stays in the test set on purpose, as a benchmark that query translation should fix.
-This miss is also dangerous: the retrieved chunks give the points for *completed* cities (2 per tile) instead
-of final scoring (1 per tile and shield), so the LLM would likely answer wrongly.
-
-Other findings:
-
-- **Weak spots:** for the Azul column bonus and the Ticket to Ride starting cards, the right section is only at
-  rank 3 or 2, with almost the same score as the sections above it.
-- **Dilution:** Carcassonne `Gameplay > Cities` is mostly about placing tiles, so its embedding barely matches
-  a scoring question.
-- **No fixed relevance threshold:** good hits range from 0.677 to 1.285, so a rule like "ignore everything above
-  1.0" would throw away correct results.
-- **Metadata filter:** the `game` filter is applied inside Chroma before ranking, so the top 3 always come from
-  the selected game.
-
 ### Score tools (`src/lib/scoring/`)
 
 The assistant answers rules questions; it does not keep score during a game. But many rules questions are
@@ -148,18 +106,10 @@ in code: `score_sushi_go_round`, `score_sushi_go_puddings` (game end) and `score
 
 **Baseline: the model without score tools.** The original reason for the tools was the assumption that an LLM
 gets this arithmetic wrong (splitting points, ignoring remainders, forgetting that a tie for first cancels second
-place). Before connecting the tools to the agent, this was measured with `scripts/test-agent.ts`, using new numbers
-instead of the rulebook examples (the retrieved passage already contains the answers to those):
-
-| Question | Expected | Without score tools | Time |
-|---|---|---|---|
-| Sushi Go! maki tie (Anna 4, Ben 4, Cleo 3, Dan 1) | 3 / 3 / 0 / 0, no second place | correct | 9.2 s |
-| Sushi Go! puddings, 5 players (5 / 1 / 1 / 1 / 1) | 6 / −1 / −1 / −1 / −1, remainder ignored | correct | 11.6 s |
-| Sushi Go! full round, 2 players, 6 card types | 41 / 25 | correct, with breakdown | 19.4 s |
-| Wizard (predicted→won: 0→2, 3→3, 2→1) | −20 / 50 / −10 | correct | 9.2 s |
-
-`gpt-5-mini` found the right rulebook section each time and applied the rule correctly: **4/4, so the assumption
-was not supported** (one run, two players at most for the full round).
+place). Before connecting the tools to the agent, this was measured with `scripts/test-agent.ts` on 4 scoring
+questions (see [Agent answers](#agent-answers-scriptstest-agentts) under Evaluation). `gpt-5-mini` found the right
+rulebook section each time and applied the rule correctly: **4/4, so the assumption was not supported** (one run,
+two players at most for the full round).
 
 **Why the tools are kept anyway:**
 
@@ -171,8 +121,11 @@ was not supported** (one run, two players at most for the full round).
 - **Structured results.** The tools return JSON, which the UI can show as a result card; free text can't be shown
   that way.
 
-The likely cost is latency: with a tool, the agent needs an extra round (search, score tool, answer). The
-comparison run with tools is still to do.
+**With the score tools connected,** all 8 test questions were answered correctly, and the agent picked the right
+tools every time: rulebook search plus score tool for the scoring questions, search only for everything else. The
+cost is latency: the 4 scoring questions took 15.2 s on average instead of 12.4 s, because the agent can need an
+extra round (search, then score tool, then answer). The system prompt tells the agent to still search the rulebook
+for scoring questions, so the answer can cite the page of the rule the tool applies.
 
 **Only for Sushi Go! and Wizard.** Tools are built where applying the rule has the most room for error:
 
@@ -219,16 +172,116 @@ functions (`src/lib/scoring/*.test.ts`). The score tests use the rulebooks' own 
 and the 2-player pudding rule. If the code agrees with the publisher's examples, the rule is implemented
 correctly. External
 services stay out of CI: there is no Chroma there, and running against OpenRouter would spend API credits on
-every push. Retrieval quality is checked manually with `scripts/test-retrieval.ts` (see above), because it
-needs real embeddings and is an evaluation rather than a pass/fail unit test. The agent's final answers are
-not unit-tested, because they are non-deterministic.
+every push. Retrieval quality and the agent's answers are checked with two evaluation scripts instead (see
+[Evaluation](#evaluation)): they need real embeddings, a running Chroma and API credits, and the agent's answers
+are non-deterministic, so they can't be pass/fail unit tests.
 
 Test files live next to the code they test (`*.test.ts`). The parser tests use small hand-written Markdown
 inputs, not the real rulebooks in `data/clean/`: each input covers exactly one case (e.g. a page change inside
 a section), so the expected output is known exactly, and editing a rulebook file can't break a parser test.
 The score tests only contain numbers.
 
+## Evaluation
+
+Two scripts evaluate the parts that depend on external services: retrieval on its own, and the whole agent. They
+run against the real Chroma collection and OpenRouter, so they are started by hand and not in CI (Chroma has to
+be running). Results are recorded in one table per script: one row per question, one column per run, so a change
+can be compared with the runs before it. Each column is a single run; the agent's answers vary between runs.
+
+### Retrieval (`scripts/test-retrieval.ts`)
+
+Before any LLM is involved, retrieval is tested on its own. If the chatbot gives a wrong answer later, this
+shows whether the problem is retrieval (wrong chunks) or generation (right chunks, wrong answer).
+
+```bash
+npx tsx --env-file=.env.local scripts/test-retrieval.ts
+```
+
+The script asks real rules questions per game with `similaritySearchWithScore(question, 3, { game })` and
+reports a HIT if one of the expected sections is in the top 3. The score is Chroma's squared L2 distance
+(lower = more similar). `expected` is a list, because rulebooks often state the same rule in several places:
+Carcassonne city points are explained in `Gameplay > Cities` and again in `Summary`.
+
+**Result: 10/11 questions find the right section in the top 3.**
+
+**Vocabulary mismatch.** Retrieval works well when the question uses the rulebook's vocabulary, but misses
+colloquial wording:
+
+| Question | Rank of `Game End and Final Scoring` | Best score |
+|---|---|---|
+| "Do I get points for a half-built city?" | not in top 3 | 0.888 (wrong section) |
+| "How are incomplete cities scored at the end of the game?" | 1 | 0.677 |
+
+The rulebook says "incomplete" and puts the rule under game end; the player says "half-built" and doesn't know
+where the answer lives. A manually rewritten query moved the correct section from outside the top 3 to rank 1,
+which motivates the query-translation step (rewriting questions into rulebook language before retrieval).
+The failing question stays in the test set on purpose, as a benchmark that query translation should fix.
+This miss is also dangerous: the retrieved chunks give the points for *completed* cities (2 per tile) instead
+of final scoring (1 per tile and shield), so the LLM would likely answer wrongly.
+
+Other findings:
+
+- **Weak spots:** for the Azul column bonus and the Ticket to Ride starting cards, the right section is only at
+  rank 3 or 2, with almost the same score as the sections above it.
+- **Dilution:** Carcassonne `Gameplay > Cities` is mostly about placing tiles, so its embedding barely matches
+  a scoring question.
+- **No fixed relevance threshold:** good hits range from 0.677 to 1.285, so a rule like "ignore everything above
+  1.0" would throw away correct results.
+- **Metadata filter:** the `game` filter is applied inside Chroma before ranking, so the top 3 always come from
+  the selected game.
+
+### Agent answers (`scripts/test-agent.ts`)
+
+```bash
+npx tsx --env-file=.env.local scripts/test-agent.ts
+```
+
+The script asks the agent 8 questions and prints every tool call, the tool results, the answer and the time. It
+checks automatically whether exactly the expected tools were called. Whether the answer is correct is checked by
+reading it against the expected answer, which is verified against the rulebook. The questions:
+
+- **4 scoring questions** for Sushi Go! and Wizard, with new numbers instead of the rulebook's worked examples (the
+  retrieved passage already contains the answers to those). They need the rulebook *and* a score tool.
+- **2 regression questions**: plain rules questions, which must still work with more tools connected.
+- **2 control questions**: scoring in games without a score tool (Azul, Ticket to Ride). The agent should answer
+  from the rulebook's table and not call a score tool.
+
+| Question | Expected | 2026-10-28<br>without score tools | 2026-10-29<br>with score tools |
+|---|---|---|---|
+| Sushi Go! maki tie (Anna 4, Ben 4, Cleo 3, Dan 1) | 3 / 3 / 0 / 0, no second place | ✅ 9.2 s | ✅ 18.1 s |
+| Sushi Go! puddings, 5 players (5 / 1 / 1 / 1 / 1) | 6 / −1 / −1 / −1 / −1, remainder ignored | ✅ 11.6 s | ✅ 12.7 s |
+| Sushi Go! full round, 2 players, 6 card types | 41 / 25 | ✅ 19.4 s | ✅ 18.9 s |
+| Wizard (predicted→won: 0→2, 3→3, 2→1) | −20 / 50 / −10 | ✅ 9.2 s | ✅ 11.2 s |
+| Carcassonne: points for a half-built city? | only at game end: 1 per tile + 1 per shield (page 6) | – | ✅ 9.5 s |
+| Wizard: what happens if I play a jester? | always loses, unless only jesters are in the trick (page 2) | – | ✅ 12.1 s |
+| Azul end-game bonus (2 rows, 1 column, 1 colour) | 21 (page 6) | – | ✅ 8.7 s |
+| Ticket to Ride: 6-car + 4-car route | 22 (page 4) | – | ✅ 8.4 s |
+| **Correct answers** | | **4/4** | **8/8** |
+| **Expected tools called** | | not checked | **8/8** |
+| **Average, 4 scoring questions** | | **12.4 s** | **15.2 s** |
+
+"–": not in the question set yet. The two regression questions were answered correctly when the agent was first
+built, before the score tools existed (11.2 s and 12.0 s).
+
+Findings:
+
+- **Tool choice:** right in every case. For Azul and Ticket to Ride the agent answered from the rulebook's table
+  and did not try to use a Sushi Go! or Wizard score tool.
+- **Latency depends on how the tools are called:** when the agent calls search and score tool one after the other
+  (maki: 9.2 → 18.1 s, Wizard: 9.2 → 11.2 s), the extra round costs time. When it calls both in the same step
+  (puddings, full round), the time hardly changes. One run each, so these numbers are rough.
+- **Page citations:** in the full round, maki and sashimi are cited from page 7 (the quick game summary) instead
+  of their own sections on pages 3–4. The rule is the same, but the main section would be the better source.
+- **Half-built city is no evidence for query translation yet:** the agent searched for "incomplete city final
+  scoring", which is the example in the `search_rulebook` tool description, copied word for word.
+
 ## Known Problems
 @langchain/community (used for the Chroma vector store) is deprecated and pulls in optional dependencies (@browserbasehq/stagehand, openai@4) that require zod v3, which conflicts with the project's zod v4.
 This is resolved with an npm overrides entry in package.json, since those packages are never used.
 (A possible improvement is to replace @langchain/community with the chromadb client directly.)
+
+Answers are slow for use in the middle of a game: about 8–19 s per question (see [Agent answers](#agent-answers-scriptstest-agentts)).
+`gpt-5-mini` is a reasoning model, and every question needs at least two model calls (choose the tool, then
+answer), three when a score tool is used after the search. Not optimised for lack of time; possible improvements
+are a lower reasoning effort, a faster model (a one-line change in `src/lib/llm.ts`, since OpenRouter serves many
+models), and shorter tool output.
