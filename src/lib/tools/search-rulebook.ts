@@ -29,7 +29,7 @@ export const searchRulebook = tool(
         name: "search_rulebook",
         description:
             "Search the official rulebook of one board game. Use it for every rules question before answering. " +
-            "Phrase the query with the rulebook's terms (e.g. 'incomplete city final scoring' instead of 'half-built city').",
+            "Phrase the query with the rulebook's own terms (section names and rule words), not the player's wording.",
         schema: z.object({
             query: z.string().describe("The rules question, phrased with the rulebook's terms"),
             game: z.enum(GAMES).describe("The game whose rulebook to search"),

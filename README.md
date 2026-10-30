@@ -54,7 +54,7 @@ Scripts (all run with `npx tsx --env-file=.env.local scripts/<name>.ts`):
 | `ingest.ts` | cleaned Markdown → chunks → embeddings → Chroma |
 | `peek.ts` | shows a few stored chunks with their metadata |
 | `test-search-tool.ts` | calls the search tool directly, no LLM |
-| `test-retrieval.ts`, `test-agent.ts` | evaluation runs, see [Evaluation](#evaluation) |
+| `test-retrieval.ts`, `test-query-translation.ts`, `test-agent.ts` | evaluation runs, see [Evaluation](#evaluation) |
 
 ## Rulebook PDF Download Links
 
@@ -320,6 +320,8 @@ The rulebook says "incomplete" and puts the rule under game end; the player says
 where the answer lives. A manually rewritten query moved the correct section from outside the top 3 to rank 1,
 which motivates the query-translation step (rewriting questions into rulebook language before retrieval).
 The failing question stays in the test set on purpose, as a benchmark that query translation should fix.
+The outcome is measured under [Query translation](#query-translation-scriptstest-query-translationts) below: the
+agent's own search query moves this question to rank 1, so no separate rewrite step was added.
 This miss is also dangerous: the retrieved chunks give the points for *completed* cities (2 per tile) instead
 of final scoring (1 per tile and shield), so the LLM would likely answer wrongly.
 
@@ -333,6 +335,58 @@ Other findings:
   1.0" would throw away correct results.
 - **Metadata filter:** the `game` filter is applied inside Chroma before ranking, so the top 3 always come from
   the selected game.
+
+### Query translation (`scripts/test-query-translation.ts`)
+
+Query translation means rewriting the player's wording into the rulebook's wording before the vector search,
+because embeddings match words, not intent ("half-built" is far from "incomplete"). The cheapest form of it is
+already built in: the agent writes the `query` argument of `search_rulebook` itself, and the tool description
+asks for the rulebook's own terms. Before adding a rewrite step (an extra LLM call per question), this script
+measures whether that is enough.
+
+```bash
+npx tsx --env-file=.env.local scripts/test-query-translation.ts
+```
+
+Per colloquial question it records three things: the rank of the expected section when the raw question goes
+straight to Chroma (top 4, like the tool), the query the agent actually sends to `search_rulebook`, and the
+rank of the expected section for that query. The questions are phrased as players ask at the table, and none of
+them appear in the tool description (an earlier version of the description used "half-built city" as its
+example, and the agent copied it word for word, which made that question useless as evidence; the example was
+removed for this measurement).
+
+| Question (expected section) | Raw question | Agent query, run 1 | Agent query, run 2 |
+|---|---|---|---|
+| Carcassonne: do I get points for a half-built city? (`Game End and Final Scoring`) | **MISS** | 1 | 1 |
+| Azul: I filled a whole column on my wall, is that worth anything? (`End of the Game`) | 2 | 2 | 4 |
+| Azul: what if I pick up tiles that don't fit anywhere? (`Floor Line`) | 2 | 1 | 1 |
+| Ticket to Ride: what do we each start with in our hand? (`Setting Up the Game`) | 1 | 1 | 1 |
+| Wizard: what happens if I guessed wrong? (`Earning Experience Points`) | 2 | 1 | 1 |
+| Sushi Go: can I put a second nigiri on the same wasabi? (`Using Wasabi`) | 1 | 1 | 1 |
+| Magic Maze: the sand timer ran out, did we lose? (`Time Restriction`) | 1 | 1 | 1 |
+| Calico: what happens when my board is full? (`Game End + Final Scoring`) | 3 | 1 | 1 |
+| **In top 4** | **7/8** | **8/8** | **8/8** |
+
+Rank = position of the expected section in the top 4 (10-30, two runs, `gpt-5-mini`). All 16 answers were
+correct and cited the right pages; 10–16 s per question.
+
+**Findings:**
+
+- **The agent's own query is enough; no rewrite step was added.** The benchmark miss ("half-built city") went
+  from outside the top 4 to rank 1 in both runs, and 4 of the 5 weaker raw questions moved up to rank 1. The
+  agent translates on its own, for example "half-built city" became `final scoring unfinished city incomplete
+  city scoring scoring cities end of game`, and "guessed wrong" became `Scoring - Correct and Incorrect
+  Predictions`.
+- **The queries are keyword bags, not questions.** The model packs several phrasings and section names into one
+  query (semicolons, quoted terms). That works with embeddings: a query that contains many of the right words
+  lands near the right chunk.
+- **Azul column bonus stays the weak spot** (rank 2, then 4). The scoring rule is split between `Gameplay >
+  Scoring` (placement points) and `End of the Game` (bonus), and both runs' queries emphasised "wall" and
+  "placing", so the wall-tiling chunks ranked above the bonus. With K=4 the section was still retrieved and
+  both answers were correct (+7 per column, page 6). If this gets worse, the fix is in the data (a cross-reference
+  line in the `Scoring` section) rather than a rewrite step.
+- **Variance:** the agent writes a different query every run, so ranks can shift by a place or two between runs;
+  the conclusion held in both.
 
 ### Agent answers (`scripts/test-agent.ts`)
 
