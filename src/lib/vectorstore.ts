@@ -23,3 +23,8 @@ export async function resetCollection() {
         await client.deleteCollection({ name: COLLECTION_NAME });
     }
 }
+
+// throws ChromaConnectionError when the server is down; the API route calls it before running the agent
+export function checkChroma() {
+    return client.heartbeat();
+}
