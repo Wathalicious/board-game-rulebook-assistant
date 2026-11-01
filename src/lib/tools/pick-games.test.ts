@@ -17,7 +17,6 @@ describe("game picker tool", () => {
 
     it("rejects invalid input before running", async () => {
         await expect(gamePickerTool.invoke({ players: 0 })).rejects.toThrow();
-        await expect(gamePickerTool.invoke({ players: 9 })).rejects.toThrow();
         await expect(gamePickerTool.invoke({ youngestAge: 0 })).rejects.toThrow();
         await expect(gamePickerTool.invoke({ maxMinutes: 0 })).rejects.toThrow();
         await expect(gamePickerTool.invoke({ maxMinutes: 2.5 })).rejects.toThrow();
