@@ -6,6 +6,26 @@ page. That includes scoring questions. For
 Sushi Go! and Wizard, whose scoring has the most room for mistakes, the arithmetic is done by code instead of the
 model. It also lists the setup for a given player count and suggests which of the seven games fits a group.
 
+## Screenshots
+
+![Start screen with the seven game tiles and three example questions](docs/screenshots/start.png)
+
+The start screen. A tile fills the input with the game's name, the examples fill it with a whole question.
+
+![A Wizard scoring answer with the score calculator card and the four retrieved sources](docs/screenshots/scoring-answer.png)
+
+A scoring question. The answer cites the page, the card below it shows the score tool's result, and the sources
+list the rulebook sections that were retrieved.
+
+![A follow-up question in the same conversation, answered without naming the game again](docs/screenshots/follow-up.png)
+
+A follow-up in the same conversation. "And what happens if I play a jester?" doesn't name the game; the history
+goes to the agent, so it knows.
+
+![The game picker answer with a table of the games that fit](docs/screenshots/game-picker.png)
+
+Which game to play. The picker's table shows the games that fit the group, with the values from the boxes.
+
 ## How it works
 
 - **RAG over the rulebooks.** The rulebook PDFs were extracted and cleaned into Markdown (`data/clean/`), split
