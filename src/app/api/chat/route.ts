@@ -5,6 +5,7 @@ import { z } from "zod";
 import { chatRequestSchema } from "../../../lib/chat-schema";
 import { toErrorResponse } from "../../../lib/chat-errors";
 import { checkChroma } from "../../../lib/vectorstore";
+import { leaksPrompt, PROMPT_LEAK_ANSWER } from "../../../lib/prompt-guard";
 
 export async function POST(request: Request) {
     const body = await request.json().catch(() => null);
@@ -17,7 +18,12 @@ export async function POST(request: Request) {
     try {
         await checkChroma();
         const result = await agent.invoke({ messages: toAgentMessages(messages) });
-        return Response.json(extractResponse(result.messages));
+        const response = extractResponse(result.messages);
+        if (leaksPrompt(response.answer)) {
+            console.warn("POST /api/chat: the answer contained the system prompt, replaced");
+            response.answer = PROMPT_LEAK_ANSWER;
+        }
+        return Response.json(response);
     } catch (err) {
         console.error("POST /api/chat failed:", err);
         const { status, error } = toErrorResponse(err);

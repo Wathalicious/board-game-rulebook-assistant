@@ -18,9 +18,16 @@ export const embeddings = new OpenAIEmbeddings({
     configuration: { baseURL: OPENROUTER_BASE_URL },
 });
 
-// chat model for the agent (no temperature: gpt-5 models don't support it)
+// chat model for the agent. CHAT_MODEL overrides the default, e.g. for comparing models with the test scripts.
+// gpt-4.1-mini (non-reasoning) replaced gpt-5-mini on 2026-11-01: about 3x faster, same answers on the test set.
+export const CHAT_MODEL = process.env.CHAT_MODEL?.trim() || "openai/gpt-4.1-mini";
+
+// temperature 0 for more consistent tool choice; gpt-5 models reject the parameter, so they get none
+const temperature = CHAT_MODEL.includes("gpt-5") ? {} : { temperature: 0 };
+
 export const chatModel = new ChatOpenAI({
-    model: "openai/gpt-5-mini",
+    model: CHAT_MODEL,
     apiKey: OPENROUTER_API_KEY,
     configuration: { baseURL: OPENROUTER_BASE_URL },
+    ...temperature,
 });
