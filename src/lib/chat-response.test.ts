@@ -77,7 +77,7 @@ describe("toAgentMessages", () => {
     it("maps user and assistant turns to Human and AI messages in order", () => {
         const messages = toAgentMessages([
             { role: "user", content: "We play Wizard." },
-            { role: "assistant", content: "Great, what is your question?" },
+            { role: "assistant", content: "Great, what is your question?", signature: "a-signature" },
             { role: "user", content: "What does a jester do?" },
         ]);
         expect(messages.map((m) => m.constructor.name)).toEqual(["HumanMessage", "AIMessage", "HumanMessage"]);

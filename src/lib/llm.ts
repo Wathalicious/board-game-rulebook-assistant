@@ -1,15 +1,10 @@
 // model config for openrouter: embeddings and chat model
 import { ChatOpenAI, OpenAIEmbeddings } from "@langchain/openai";
+import { requireEnv } from "./env";
 
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 
-// fail at startup with a clear message instead of a 401 at the first request
-function requireEnv(name: string): string {
-    const value = process.env[name]?.trim();
-    if (!value) throw new Error(`${name} is not set. Add it to .env.local (see README, Setup).`);
-    return value;
-}
-
+// read at import, so a missing key stops the app and every script at startup
 const OPENROUTER_API_KEY = requireEnv("OPENROUTER_API_KEY");
 
 export const embeddings = new OpenAIEmbeddings({

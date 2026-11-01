@@ -8,8 +8,9 @@ export function toAgentMessages(history: ChatMessage[]): BaseMessage[] {
     return history.map((m) => (m.role === "user" ? new HumanMessage(m.content) : new AIMessage(m.content)));
 }
 
-// the last AI message is the answer; ToolMessages give the sources (search tool) and tool results (other tools)
-export function extractResponse(messages: BaseMessage[]): ChatResponse {
+// the last AI message is the answer; ToolMessages give the sources (search tool) and tool results (other tools).
+// the signature is not part of this: the route signs the answer it finally returns (after the prompt-leak check)
+export function extractResponse(messages: BaseMessage[]): Omit<ChatResponse, "signature"> {
     // tool call arguments by call id, so a result can be shown together with its input
     const callArgs = new Map<string, Record<string, unknown>>();
     const sources: Source[] = [];

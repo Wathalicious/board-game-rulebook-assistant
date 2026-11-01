@@ -12,8 +12,8 @@ export const gamePickerTool = tool(
             "available play time. All filters are optional; use only the ones the player mentions. Returns the fitting " +
             "games with their player range, minimum age and play time from the box. An empty list means no game fits.",
         schema: z.object({
-            players: z.number().int().min(1).max(8).optional().describe("Number of players"),
-            youngestAge: z.number().int().min(1).max(99).optional().describe("Age of the youngest player"),
+            players: z.number().int().min(1).optional().describe("Number of players"),
+            youngestAge: z.number().int().min(1).optional().describe("Age of the youngest player"),
             maxMinutes: z.number().int().min(1).optional().describe("Available play time in minutes"),
         }),
     },

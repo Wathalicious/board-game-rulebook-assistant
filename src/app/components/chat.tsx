@@ -23,6 +23,14 @@ function gameFromInput(value: string): Game | null {
   return GAMES.find((game) => lower.startsWith(`${GAME_NAMES[game].toLowerCase()}:`)) ?? null;
 }
 
+// a turn as the API takes it, without what the UI shows under an answer. an assistant turn keeps the signature the
+// server gave it, so the route can tell that the turn is its own and not written in the browser
+function toChatMessage(turn: Turn): ChatMessage {
+  return turn.role === "user"
+    ? { role: "user", content: turn.content }
+    : { role: "assistant", content: turn.content, signature: turn.signature };
+}
+
 export function Chat() {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [input, setInput] = useState("");
@@ -71,15 +79,19 @@ export function Chat() {
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        // only role + content go to the API, not the sources and tool results of earlier answers
-        body: JSON.stringify({ messages: history.map(({ role, content }) => ({ role, content })) }),
+        // only the conversation goes to the API (role, content, the signature of each assistant turn), not the sources
+        // and tool results of earlier answers
+        body: JSON.stringify({ messages: history.map(toChatMessage) }),
       });
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
         throw new Error(body.error ?? `The server answered with status ${response.status}.`);
       }
       const data: ChatResponse = await response.json();
-      setTurns([...history, { role: "assistant", content: data.answer, sources: data.sources, toolResults: data.toolResults }]);
+      setTurns([
+        ...history,
+        { role: "assistant", content: data.answer, signature: data.signature, sources: data.sources, toolResults: data.toolResults },
+      ]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong.");
     } finally {
