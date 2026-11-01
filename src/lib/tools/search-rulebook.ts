@@ -3,13 +3,16 @@ import { tool } from "langchain";
 import { z } from "zod";
 import type { Source } from "../chat-types";
 import { GAMES } from "../games";
+import { translateQuery } from "../query-translation";
 import { getVectorStore } from "../vectorstore";
 
 const K = 4;
 
 export const searchRulebook = tool(
     async ({ query, game }): Promise<[string, Source[]]> => {
-        const results = await getVectorStore().similaritySearch(query, K, { game });
+        // query translation: the agent's query is rewritten into the rulebook's vocabulary before the vector search
+        const translated = await translateQuery(query, game);
+        const results = await getVectorStore().similaritySearch(translated, K, { game });
         if (results.length === 0) return [`No rulebook passages found for ${game}.`, []];
 
         // page in front of every chunk, so the model can cite its sources

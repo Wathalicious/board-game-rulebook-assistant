@@ -1,16 +1,16 @@
-// query translation test (step 8): does the agent's own search query find the right section better than the raw question?
-// per colloquial question: rank of the expected section for the raw question (Chroma only), the query the agent sends to
-// search_rulebook, and the rank for that query. no DeepEval, no judge: section match is a substring check on metadata.
+// query translation test
 import { AIMessage, HumanMessage } from "langchain";
 import { agent } from "../src/lib/agent";
+import { type Game } from "../src/lib/games";
+import { translateQuery } from "../src/lib/query-translation";
 import { getVectorStore } from "../src/lib/vectorstore";
 
 const K = 4; // same as the search tool
 
 // expected: sections that answer the question (substring match, any one counts)
-type TestCase = { game: string; question: string; expected: string[] };
+type TestCase = { game: Game; question: string; expected: string[] };
 
-// colloquial wording, as players ask at the table, not the rulebook's terms; none of these appear in the tool description
+// colloquial wording, as players ask at the table, not the rulebook's terms
 const TEST_CASES: TestCase[] = [
     { game: "carcassonne", question: "Carcassonne: do I get points for a half-built city?", expected: ["Game End and Final Scoring"] },
     { game: "azul", question: "Azul: I filled a whole column on my wall, is that worth anything?", expected: ["End of the Game"] },
@@ -32,9 +32,19 @@ async function rank(query: string, tc: TestCase): Promise<{ rank: string; top: s
 }
 
 async function main() {
-    const summary: { question: string; rawRank: string; agentQuery: string; agentRank: string; seconds: string }[] = [];
+    const summary: {
+        question: string;
+        rawRank: string;
+        agentQuery: string;
+        agentRank: string;
+        translatedQuery: string;
+        translatedRank: string;
+        translateSeconds: string;
+        seconds: string;
+    }[] = [];
     let rawHits = 0;
     let agentHits = 0;
+    let translatedHits = 0;
 
     for (const tc of TEST_CASES) {
         console.log(`\n=== [${tc.game}] ${tc.question}  (expected: ${tc.expected.join(" | ")})`);
@@ -55,7 +65,7 @@ async function main() {
             }
         }
 
-        // 3. the agent's query straight to chroma
+        // 3. the agent's query straight to chroma (what the tool searched with before the rewrite step)
         const agentRanks: string[] = [];
         for (const q of queries) {
             const r = await rank(q, tc);
@@ -63,20 +73,41 @@ async function main() {
             console.log(`AGENT QUERY   '${q}' → rank ${r.rank}, top: ${r.top}`);
         }
         if (queries.length === 0) console.log("AGENT QUERY   none (search_rulebook not called)");
+
+        // 4. the rewritten query (what the tool searches with now), rewritten here again because the tool keeps it to itself
+        const translated: string[] = [];
+        const translatedRanks: string[] = [];
+        let translateMs = 0;
+        for (const q of queries) {
+            const t0 = Date.now();
+            const t = await translateQuery(q, tc.game);
+            translateMs += Date.now() - t0;
+            const r = await rank(t, tc);
+            translated.push(t);
+            translatedRanks.push(r.rank);
+            console.log(`TRANSLATED    '${t}' → rank ${r.rank}, top: ${r.top}`);
+        }
         console.log(`ANSWER (${seconds}s):\n${result.messages.at(-1)?.text}`);
 
         if (raw.rank !== "MISS") rawHits++;
         if (agentRanks.some((r) => r !== "MISS")) agentHits++;
+        if (translatedRanks.some((r) => r !== "MISS")) translatedHits++;
         summary.push({
             question: tc.question,
             rawRank: raw.rank,
             agentQuery: queries.join(" | ") || "none",
             agentRank: agentRanks.join(" | ") || "-",
+            translatedQuery: translated.join(" | ") || "none",
+            translatedRank: translatedRanks.join(" | ") || "-",
+            translateSeconds: queries.length ? (translateMs / 1000).toFixed(1) : "-",
             seconds,
         });
     }
 
-    console.log(`\n=== SUMMARY: raw question ${rawHits}/${TEST_CASES.length}, agent query ${agentHits}/${TEST_CASES.length} in the top ${K}`);
+    console.log(
+        `\n=== SUMMARY: raw question ${rawHits}/${TEST_CASES.length}, agent query ${agentHits}/${TEST_CASES.length}, ` +
+            `translated query ${translatedHits}/${TEST_CASES.length} in the top ${K}`,
+    );
     console.table(summary);
 }
 

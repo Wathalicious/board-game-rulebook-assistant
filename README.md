@@ -9,8 +9,9 @@ model. It also lists the setup for a given player count and suggests which of th
 ## How it works
 
 - **RAG over the rulebooks.** The rulebook PDFs were extracted and cleaned into Markdown (`data/clean/`), split
-  into chunks per section and page, embedded and stored in ChromaDB. A question is answered from the retrieved
-  passages only, never from the model's own knowledge of the games.
+  into chunks per section and page, embedded and stored in ChromaDB. Before the vector search, a rewrite step
+  translates the search query into the rulebook's vocabulary (`src/lib/query-translation.ts`). A question is
+  answered from the retrieved passages only, never from the model's own knowledge of the games.
 - **An agent with tools.** A LangChain.js agent (`src/lib/agent.ts`) with `gpt-4.1-mini` via OpenRouter decides which
   tools to call: `search_rulebook` (retrieval), three score tools (Sushi Go! round, Sushi Go! puddings, Wizard round),
   `get_player_count_setup` and `pick_games`. The tool logic is plain TypeScript in `src/lib/` and unit-tested.
@@ -28,7 +29,7 @@ browser  ── POST /api/chat { messages }
             └─ agent.invoke (src/lib/agent.ts)             model error → 502 / anything else → 500
                  │  gpt-4.1-mini via OpenRouter (temperature 0), system prompt, tool-calling loop
                  │
-                 ├─ search_rulebook ──► ChromaDB (collection "rulebooks", filtered by game, top 4)
+                 ├─ search_rulebook ──► translateQuery (one model call) ──► ChromaDB ("rulebooks", by game, top 4)
                  ├─ score_sushi_go_round / score_sushi_go_puddings / score_wizard_round
                  ├─ get_player_count_setup
                  └─ pick_games
@@ -454,7 +455,8 @@ where the answer lives. A manually rewritten query moved the correct section fro
 which motivates the query-translation step (rewriting questions into rulebook language before retrieval).
 The failing question stays in the test set on purpose, as a benchmark that query translation should fix.
 The outcome is measured under [Query translation](#query-translation-scriptstest-query-translationts) below: the
-agent's own search query moves this question to rank 1, so no separate rewrite step was added.
+agent's own search query moves this question to rank 1, and since 2026-11-01 an explicit rewrite step in the
+search tool does the same for the weaker questions.
 This miss is also dangerous: the retrieved chunks give the points for *completed* cities (2 per tile) instead
 of final scoring (1 per tile and shield), so the LLM would likely answer wrongly.
 
@@ -472,21 +474,32 @@ Other findings:
 ### Query translation (`scripts/test-query-translation.ts`)
 
 Query translation means rewriting the player's wording into the rulebook's wording before the vector search,
-because embeddings match words, not intent ("half-built" is far from "incomplete"). The cheapest form of it is
-already built in: the agent writes the `query` argument of `search_rulebook` itself, and the tool description
-asks for the rulebook's own terms. Before adding a rewrite step (an extra LLM call per question), this script
-measures whether that is enough.
+because embeddings match words, not intent ("half-built" is far from "incomplete"). The project has it in two
+forms:
+
+1. **The agent writes the query.** The `query` argument of `search_rulebook` is written by the agent, with the
+   chat history in view, and the tool description asks for the rulebook's own terms. This is the cheapest form
+   and was the only one until 2026-11-01, because the first measurement (below) showed it was enough with
+   `gpt-5-mini`.
+2. **An explicit rewrite step** (`src/lib/query-translation.ts`, added 2026-11-01, a project requirement).
+   `search_rulebook` sends the agent's query through one more model call with a short prompt: rewrite it into
+   the words a rulebook uses (section names, rule terms, component names, scoring terms), keep every number and
+   name, add synonyms, reply with the query only. The tool then searches with the rewritten query. A failed or
+   empty rewrite falls back to the agent's query, so the step can slow retrieval down but never break it. The
+   rewritten query stays inside the tool; the model and the UI see the passages, not the query.
 
 ```bash
 npx tsx --env-file=.env.local scripts/test-query-translation.ts
 ```
 
-Per colloquial question it records three things: the rank of the expected section when the raw question goes
-straight to Chroma (top 4, like the tool), the query the agent actually sends to `search_rulebook`, and the
-rank of the expected section for that query. The questions are phrased as players ask at the table, and none of
-them appear in the tool description (an earlier version of the description used "half-built city" as its
-example, and the agent copied it word for word, which made that question useless as evidence; the example was
-removed for this measurement).
+Per colloquial question the script records the rank of the expected section (top 4, like the tool) for three
+queries: the raw question straight to Chroma, the query the agent sends to `search_rulebook`, and the rewritten
+query the tool actually searches with (rewritten once more by the script, with the time it took). The questions
+are phrased as players ask at the table, and none of them appear in the tool description (an earlier version of
+the description used "half-built city" as its example, and the agent copied it word for word, which made that
+question useless as evidence; the example was removed for this measurement).
+
+**First measurement, 2026-10-30, `gpt-5-mini`, agent query only** (before the rewrite step existed):
 
 | Question (expected section) | Raw question | Agent query, run 1 | Agent query, run 2 |
 |---|---|---|---|
@@ -503,9 +516,9 @@ removed for this measurement).
 Rank = position of the expected section in the top 4 (10-30, two runs, `gpt-5-mini`). All 16 answers were
 correct and cited the right pages; 10–16 s per question.
 
-**Findings:**
+**Findings of the first measurement:**
 
-- **The agent's own query is enough; no rewrite step was added.** The benchmark miss ("half-built city") went
+- **The agent's own query was enough; no rewrite step was added at the time.** The benchmark miss ("half-built city") went
   from outside the top 4 to rank 1 in both runs, and 4 of the 5 weaker raw questions moved up to rank 1. The
   agent translates on its own, for example "half-built city" became `final scoring unfinished city incomplete
   city scoring scoring cities end of game`, and "guessed wrong" became `Scoring - Correct and Incorrect
@@ -520,6 +533,42 @@ correct and cited the right pages; 10–16 s per question.
   line in the `Scoring` section) rather than a rewrite step.
 - **Variance:** the agent writes a different query every run, so ranks can shift by a place or two between runs;
   the conclusion held in both.
+
+**Second measurement, 2026-11-01, `gpt-4.1-mini` with temperature 0, with the rewrite step** (one run):
+
+| Question (expected section) | Raw question | Agent query | Rewritten query (shortened) | |
+|---|---|---|---|---|
+| Carcassonne: half-built city (`Game End and Final Scoring`) | **MISS** | `scoring incomplete city` → 1 | `Scoring Incomplete Cities, … Points for Unfinished Cities, … Endgame City Scoring` | 1 |
+| Azul: whole column on my wall (`End of the Game`) | 2 | `scoring for completed columns on wall` → 4 | `Scoring completed vertical columns on the player board wall section final scoring end-of-round scoring` | 1 |
+| Azul: tiles that don't fit anywhere (`Floor Line`) | 2 | `taking tiles that don't fit on pattern lines` → 2 | `Taking tiles from the factory displays or center, … handling excess tiles, floor line penalties` | 1 |
+| Ticket to Ride: what do we start with in hand? (`Setting Up the Game`) | 1 | `starting hand` → 1 | `Setup initial train cards dealt starting hand beginning cards` | 1 |
+| Wizard: what if I guessed wrong? (`Earning Experience Points`) | 2 | `scoring for wrong prediction` → 1 | `Scoring penalties for incorrect bids, scoring for failed predictions, …` | 1 |
+| Sushi Go: second nigiri on the same wasabi? (`Using Wasabi`) | 1 | `wasabi nigiri placement` → 1 | `Wasabi card placement rules … Wasabi and Nigiri card interaction …` | 1 |
+| Magic Maze: the sand timer ran out (`Time Restriction`) | 1 | `sand timer runs out lose` → 1 | `Sand timer timer runs out end of timer lose the game losing condition` | 1 |
+| Calico: what happens when my board is full? (`Game End + Final Scoring`) | 3 | `what happens when a player's board is full` → 3 | `End of game conditions player quilt full tile placement completion scoring final turn` | 1 |
+| **In top 4** | **7/8** | **8/8** | | **8/8** |
+| **At rank 1** | **3/8** | **5/8** | | **8/8** |
+
+All 8 answers correct with the right pages; 3.3–4.5 s per question, of which the rewrite call took 0.7–1.2 s.
+
+**Findings of the second measurement:**
+
+- **The rewrite step does what the reasoning model used to do by itself.** With `gpt-4.1-mini` the agent's
+  queries are short phrases of two to six words, not the keyword bags `gpt-5-mini` wrote, and two questions
+  slipped: the Azul column bonus to rank 4 and Calico's game end to rank 3. The rewritten queries look like
+  the old keyword bags again (section names plus synonyms), and they put the expected section at rank 1 for all
+  eight questions. So the step that wasn't needed with the reasoning model earns its place with the faster one.
+- **The weak spot is gone, for now.** Azul's column bonus, rank 2 and 4 in all earlier runs, is rank 1 with the
+  rewritten query, because the rewrite adds "final scoring" next to "wall" and "columns". One run; the
+  cross-reference line in the data (Improvements) stays on the list in case it comes back.
+- **Cost: about one second per search.** One extra model call, 0.7–1.2 s measured. On the 17 agent questions
+  the average went from 3.0 s to 3.5 s and the scoring questions from 4.8 s to 5.4 s (one run each), with all
+  answers unchanged and correct. Still a third of the `gpt-5-mini` times.
+- **Nothing was lost in the rewrite.** The prompt tells the model to keep every number, name and game term; in
+  the 8 + 17 questions no query lost one. The risk is real for queries with specific values ("6-car route"), so
+  it is worth a look whenever a scoring answer goes wrong.
+- **Only the search is translated.** The score tools, setup helper and game picker take structured arguments and
+  don't go through the step.
 
 ### Agent answers (`scripts/test-agent.ts`)
 
@@ -665,6 +714,10 @@ repeat; they did, call for call.
 | **Average, all 17** | **9.7 s** | **3.3 s** | **3.0 s** |
 | **Average, 4 scoring questions** | **14.1 s** | **6.0 s** | **4.8 s** |
 
+All three runs were before the rewrite step in `search_rulebook` (see
+[Query translation](#query-translation-scriptstest-query-translationts)); with it, the third configuration
+averages 3.5 s over all 17 and 5.4 s over the scoring questions, same answers.
+
 Findings:
 
 - **Three times faster, same answers.** Every one of the 12 rules and scoring answers was correct with all three
@@ -701,10 +754,10 @@ Findings:
 
 ## Known Problems
 
-- **Answers still take a few seconds:** 1–6 s per question since the switch to `gpt-4.1-mini` on 2026-11-01
+- **Answers still take a few seconds:** 1–7 s per question since the switch to `gpt-4.1-mini` on 2026-11-01
   (7–27 s before, see [Model comparison](#model-comparison-scriptstest-agentts-chat_model)). Every question
   needs at least two model calls (choose the tools, then answer), three when a score tool is called after the
-  search, and nothing is streamed.
+  search, plus one per rulebook search for the rewrite step, and nothing is streamed.
 - **Answers are not streamed:** the UI shows a "Searching the rulebook…" indicator and then the whole answer.
   Streaming would need a streaming route handler and client; left out for time, since the answers are short.
 - **A Chroma failure in the middle of a request reaches the model, not the UI.** The heartbeat only catches an
