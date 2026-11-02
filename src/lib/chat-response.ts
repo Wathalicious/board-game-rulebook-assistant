@@ -22,6 +22,9 @@ export function extractResponse(messages: BaseMessage[]): Omit<ChatResponse, "si
                 if (call.id) callArgs.set(call.id, call.args);
             }
         } else if (ToolMessage.isInstance(m)) {
+            // a failed tool call (e.g. arguments outside the schema) is an error text for the model, not a result
+            // for the player: the model answers in words and the cards stay empty
+            if (m.status === "error") continue;
             if (m.name === SEARCH_TOOL) {
                 // the search tool puts its sources in the artifact (the model only sees the text)
                 for (const source of (m.artifact as Source[] | undefined) ?? []) {

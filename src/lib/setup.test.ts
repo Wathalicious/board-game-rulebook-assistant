@@ -87,7 +87,7 @@ describe("SETUP data", () => {
     it.each(GAMES)("%s: player range between 1 and 8", (game) => {
         const { minPlayers, maxPlayers } = SETUP[game];
         expect(minPlayers).toBeGreaterThanOrEqual(1);
-        expect(maxPlayers).toBeLessThanOrEqual(8); // the tool schema allows at most 8
+        expect(maxPlayers).toBeLessThanOrEqual(8); // no supported game takes more than 8 (Magic Maze); catches a typo like 48
         expect(minPlayers).toBeLessThanOrEqual(maxPlayers);
     });
 

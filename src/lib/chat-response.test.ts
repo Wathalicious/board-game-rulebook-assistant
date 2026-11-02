@@ -68,6 +68,12 @@ describe("extractResponse", () => {
         expect(extractResponse([question, toolCalls, result, answer]).sources).toEqual([]);
     });
 
+    it("leaves a failed tool call out of the cards", () => {
+        const call = new AIMessage({ content: "", tool_calls: [{ id: "c", name: "get_player_count_setup", args: { game: "azul", players: 0 } }] });
+        const failed = new ToolMessage({ tool_call_id: "c", name: "get_player_count_setup", content: "Error invoking tool ...", status: "error" });
+        expect(extractResponse([question, call, failed, answer]).toolResults).toEqual([]);
+    });
+
     it("returns an empty answer if the conversation ends without an AI message", () => {
         expect(extractResponse([question]).answer).toBe("");
     });

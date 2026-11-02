@@ -15,7 +15,7 @@ export const setupHelperTool = tool(
             "mention a player count; for the general setup steps, search the rulebook.",
         schema: z.object({
             game: z.enum(GAMES).describe("The game to set up"),
-            players: z.number().int().min(1).max(8).describe("Number of players"),
+            players: z.number().int().min(1).describe("Number of players"),
         }),
     },
 );
