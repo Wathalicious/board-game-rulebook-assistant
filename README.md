@@ -36,18 +36,20 @@ Which game to play. The picker's table shows the games that fit the group, with 
   tools to call: `search_rulebook` (retrieval), three score tools (Sushi Go! round, Sushi Go! puddings, Wizard round),
   `get_player_count_setup` and `pick_games`. The tool logic is plain TypeScript in `src/lib/` and unit-tested.
 - **Next.js app.** The agent runs on the server in a route handler (`POST /api/chat`), so the API key never reaches
-  the browser. The page is a chat UI with the seven game tiles, tool-result cards and a source list.
+  the browser, and the route streams the answer as it is written. The page is a chat UI with the seven game
+  tiles, tool-result cards and a source list.
 
 One request, from the browser to the answer:
 
 ```
 browser  ── POST /api/chat { messages }
             │
+            ├─ rate limit (src/lib/rate-limit.ts)          21st question in a minute from one client → 429
             ├─ zod schema (src/lib/chat-schema.ts)         invalid body → 400 with the reason
             ├─ verifyHistory (src/lib/chat-signature.ts)   assistant turn not signed by this server → 400
             ├─ Chroma heartbeat (src/lib/vectorstore.ts)   Chroma down → 503
             │
-            └─ agent.invoke (src/lib/agent.ts)             model error → 502 / anything else → 500
+            └─ agent.stream (src/lib/agent.ts)             error before the first event → 502 / 500, after it → error event
                  │  gpt-4.1-mini via OpenRouter (temperature 0), system prompt, tool-calling loop
                  │
                  ├─ search_rulebook ──► translateQuery (one model call) ──► ChromaDB ("rulebooks", by game, top 4)
@@ -55,9 +57,10 @@ browser  ── POST /api/chat { messages }
                  ├─ get_player_count_setup
                  └─ pick_games
             │
-            ├─ extractResponse (src/lib/chat-response.ts) ──► { answer, sources, toolResults }
+            ├─ relayAgentStream (src/lib/chat-stream.ts)   ──► events while the agent works: text pieces, tools (sources + results)
+            ├─ extractResponse (src/lib/chat-response.ts) ──► { answer, sources, toolResults } from the collected messages
             ├─ leaksPrompt (src/lib/prompt-guard.ts)       answer quotes the prompt → fixed decline instead
-            └─ sign (src/lib/chat-signature.ts)            ──► { answer, signature, sources, toolResults }
+            └─ sign (src/lib/chat-signature.ts)            ──► done event { answer, signature, sources, toolResults }
 ```
 
 ## Setup
@@ -291,20 +294,35 @@ client component (`src/app/components/chat.tsx`) that keeps the conversation in 
   one the server gave the answer (see
   [Security and error handling](#security-and-error-handling-srclibchat-schemats-srclibchat-errorsts)); the UI
   stores it with the turn and sends it back unchanged.
-- **Response: `{ answer, signature, sources, toolResults }`.** `search_rulebook` returns its passages with
+- **Response: a stream of events, ending with `{ answer, signature, sources, toolResults }`.** `search_rulebook` returns its passages with
   `responseFormat: "content_and_artifact"`: the text goes to the model unchanged, and the artifact holds
   `{ game, section, page }` per passage. The other tools' JSON results are paired with the arguments they were
   called with. A pure function (`src/lib/chat-response.ts`) turns the agent's message list into this response, so
   the extraction is unit-tested without an LLM.
 - **Under each answer:** one card per tool result (score tables, setup facts with pages, picked games) and a
   collapsed "Sources" list with game, section and page, so the answer stays short and the evidence is one click
-  away. A "Searching the rulebook…" indicator covers the wait; answers are not streamed (see Known Problems).
+  away. A failed tool call (e.g. a value the tool schema rejects) gets no card: LangChain hands the error text to
+  the model, which answers in words. The answer appears word by word as the model writes it; a "Searching the
+  rulebook…" line covers the stretch before the first event.
+- **Streaming (`src/lib/chat-stream.ts`, `src/lib/chat-events.ts`).** Added 2026-11-02. The route answers with a
+  stream of newline-delimited JSON events instead of one JSON body: `text` for each piece of the answer as the
+  model writes it, `tools` with the sources and tool results as soon as the tools are done (the cards appear
+  before the answer), `clear` if the model wrote a preamble before calling its tools, and at the end `done` with
+  the finished answer, checked and signed, or `error`. The agent runs with LangChain's two stream modes at once:
+  `messages` gives the model's tokens, `updates` the whole messages per step, which are collected so that the
+  finished answer is built by the same `extractResponse` as before. Only tokens from the agent's model node are
+  forwarded: the query translation inside the search tool is a model call too, and its tokens are not the answer.
+  The route waits for the agent's first event before the response starts, so an error from the first model call
+  still gets its own status (502, 503); a failure later arrives as an `error` event in a 200 stream. The browser
+  reads the stream line by line (`readEvents`), shows the text with a cursor, and replaces everything with the
+  `done` event, which is the only text that gets a signature.
 
 ### Security and error handling (`src/lib/chat-schema.ts`, `src/lib/chat-errors.ts`)
 
-The route handler does five things before and around the agent call, in this order: validate the body, verify
-the signatures of the assistant turns in the history, check that Chroma is reachable, run the agent inside a
-try/catch, and check the answer for the system prompt. The rest of the security is the system prompt itself.
+The route handler does six things before and around the agent call, in this order: apply the rate limit,
+validate the body, verify the signatures of the assistant turns in the history, check that Chroma is reachable,
+run the agent and stream its answer, and check the finished answer for the system prompt. The rest of the
+security is the system prompt itself.
 
 **Input validation with zod.** `chatRequestSchema` describes the only body the route accepts: a `messages` array
 with 1 to 40 entries, each a user turn `{ role: "user", content }` or an assistant turn
@@ -332,17 +350,33 @@ key is derived from `OPENROUTER_API_KEY` with HKDF, a one-way function, so there
 and the key is the same after a restart, which keeps an open conversation valid. User turns stay unsigned: the
 player may say anything, the model just shouldn't be told it already agreed.
 
+**Rate limit (`src/lib/rate-limit.ts`).** Added 2026-11-02. The chat route is the only thing that spends OpenRouter
+credits, and without a limit one client could drain them with a loop. The route refuses the 21st question from
+the same client within 60 seconds with a 429 and a `Retry-After` header; the chat shows "Too many questions in a
+short time, wait N seconds." The limit is a sliding window: the limiter keeps the times of each client's recent
+requests, drops the ones older than a minute, and refuses when 20 remain, so a burst at the end of one minute
+can't be followed by another at the start of the next. Refused requests don't count. The client is the first
+address in `X-Forwarded-For` when a proxy sets it, else `X-Real-IP`, else one shared bucket, which is what the
+local dev server gets. The check comes first in the route, before the body is even parsed, because a refused
+request should cost nothing. The limiter lives in memory, per process: enough for one server, and twenty
+questions a minute is far above what one table needs and far below what hurts.
+
 **Error handling.** Errors never reach the client as they are. `toErrorResponse` maps them to a status and a fixed
 message for the player; the original error goes to `console.error` on the server, where the stack and any URLs or
 key fragments in the message belong:
 
 | Error | Status | Message in the chat |
 |---|---|---|
+| 21st question in a minute from one client (the route's own check, before `toErrorResponse`) | 429 | Too many questions in a short time, wait N seconds. |
 | Chroma not reachable (`ChromaConnectionError`) | 503 | The rulebook database is not reachable. |
 | OpenRouter rejects the key (401) | 502 | The language model rejected the server's API key. |
 | OpenRouter rate limit (429) | 503 | The language model is busy right now. |
 | Any other provider status | 502 | The language model could not be reached. |
 | Anything else (network failure, a bug) | 500 | Something went wrong while answering. |
+
+Since the answer is streamed (2026-11-02), these statuses apply to errors up to the agent's first event, which
+the route waits for before the response starts; a failure after that arrives as an `error` event with the same
+message in a 200 stream, and the chat shows it the same way.
 
 Why Chroma is checked *before* the agent runs: `createAgent` catches errors thrown inside tools and hands them back
 to the model as a tool message ("… Please fix your mistakes"), so that the model can retry with better arguments.
@@ -423,7 +457,7 @@ npm run lint
 GitHub Actions (`.github/workflows/ci.yml`) runs lint, typecheck and the unit tests on every push and pull
 request, on Node 22.
 
-**What is tested automatically.** The unit tests (119 in 13 files) cover our own logic, everything that needs no
+**What is tested automatically.** The unit tests (134 in 15 files) cover our own logic, everything that needs no
 LLM, API key or Chroma:
 
 - **Markdown parser** (`src/lib/chunking.test.ts`): nested headings, page changes, empty headings, Windows line
@@ -454,12 +488,22 @@ LLM, API key or Chroma:
   fails for a changed text, another key, and an empty, made-up or lengthened signature; a history with one forged
   assistant turn is rejected. The tests pass their own key, so they don't depend on the environment.
 - **Route handler** (`src/app/api/chat/route.test.ts`): the route called with real `Request` objects, with the
-  agent and the Chroma client replaced by mocks (`vi.mock`), so it needs no key, model or database. Covered: the
-  happy path with a signed answer, the history arriving at the agent as Human/AI messages, sources and tool
-  results passed through, the answer trimmed before signing, a prompt leak replaced and the replacement signed, a
-  forged assistant turn rejected with 400 before Chroma or the agent are touched, a body that isn't JSON, each
-  schema failure with its message, Chroma down (503), a 401 and a 429 from the provider (502 and 503, with the
-  provider's message kept out of the response) and an unknown error (500).
+  agent and the Chroma client replaced by mocks (`vi.mock`), so it needs no key, model or database; the mock
+  agent streams its answer token by token like the real one. Covered: the answer streamed piece by piece and
+  ending with a signed `done` event, the history arriving at the agent as Human/AI messages, the `tools` event
+  with sources and tool results before the first word of the answer, a preamble before a tool call cleared and
+  tokens from other nodes ignored, the answer trimmed before signing, a prompt leak replaced and the replacement
+  signed, a forged assistant turn rejected with 400 before Chroma or the agent are touched, a body that isn't
+  JSON, each schema failure with its message, the 21st request from one client refused with 429 and
+  `Retry-After` while another client gets through, Chroma down (503), a 401 and a 429 from the provider before
+  the first event (502 and 503, with the provider's message kept out of the response), an unknown error before
+  the first event (500), and a failure after the stream has started, which arrives as an `error` event.
+- **Rate limiter** (`src/lib/rate-limit.test.ts`): with a small limit and window and the clock passed in: the
+  limit itself, the refusal with the seconds until the oldest request leaves the window, the sliding (a slot
+  frees up exactly when it leaves), clients counted separately, refused requests not counting, and the client
+  address taken from the headers.
+- **Stream reader** (`src/lib/chat-events.test.ts`): one event per line, a line split across two network pieces,
+  a last line without a newline, empty lines, an empty body.
 
 **What isn't, and why.** External services stay out of CI: there is no Chroma there, and running against
 OpenRouter would spend API credits on every push. Retrieval quality, the agent's answers and its behaviour on
@@ -811,9 +855,14 @@ Findings:
 - **Answers still take a few seconds:** 1–7 s per question since the switch to `gpt-4.1-mini` on 2026-11-01
   (7–27 s before, see [Model comparison](#model-comparison-scriptstest-agentts-chat_model)). Every question
   needs at least two model calls (choose the tools, then answer), three when a score tool is called after the
-  search, plus one per rulebook search for the rewrite step, and nothing is streamed.
-- **Answers are not streamed:** the UI shows a "Searching the rulebook…" indicator and then the whole answer.
-  Streaming would need a streaming route handler and client; left out for time, since the answers are short.
+  search, plus one per rulebook search for the rewrite step. Since 2026-11-02 the answer streams, so the wait is
+  the tool calls before the first word, not the whole answer.
+- **The prompt-leak check runs on the finished answer.** With streaming, a leaked line can be on screen for a
+  moment before the `done` event replaces it. It never gets a signature, so it can't enter the history. Holding
+  the stream back until the check has run would cost the streaming.
+- **The rate limit is per process and per address.** It forgets its counts on a restart, several server
+  instances would each count on their own, and everyone behind one proxy address shares a bucket; the local dev
+  server has one bucket for everything. A shared store would fix the first two, a session id the third.
 - **A Chroma failure in the middle of a request reaches the model, not the UI.** The heartbeat only catches an
   outage before the agent starts; `createAgent` turns errors inside tools into tool messages for the model (see
   [Security and error handling](#security-and-error-handling-srclibchat-schemats-srclibchat-errorsts)).
@@ -839,17 +888,16 @@ Findings:
 
 In the order I would do them:
 
-1. **Streaming answers**, so the player sees the first words at once instead of the whole answer after a few
-   seconds. (The bigger latency step, a non-reasoning model, is done: 2026-11-01, see
-   [Chat model](#chat-model-srclibllmts). Shorter tool output is the remaining idea on that side.)
-2. **A prompt rule against the model's own arithmetic** in explanations ("explain with the rule from the passage"),
+1. **A prompt rule against the model's own arithmetic** in explanations ("explain with the rule from the passage"),
    if the wrong-explanation cases pile up with `gpt-4.1-mini`; measure with the scoring questions.
-3. **Automated answer evaluation with DeepEval** (LLM-as-judge): goldens from the existing question sets, metrics
+2. **Automated answer evaluation with DeepEval** (LLM-as-judge): goldens from the existing question sets, metrics
    such as answer correctness and faithfulness to the retrieved passages, run by hand with `npm run eval`, not in
    CI. Today the answers are judged by reading them.
-4. **Azul scoring cross-reference:** a line in the `Scoring` section of `data/clean/azul.md` pointing to the
+3. **Azul scoring cross-reference:** a line in the `Scoring` section of `data/clean/azul.md` pointing to the
    end-game bonus, so the column-bonus question stops being the weak spot of retrieval.
-5. **Merge very short chunks** into the previous piece if they turn out to make retrieval noisy.
-6. **Replace `@langchain/community`** with the `chromadb` client directly, which removes the deprecated package and
+4. **Merge very short chunks** into the previous piece if they turn out to make retrieval noisy.
+5. **Replace `@langchain/community`** with the `chromadb` client directly, which removes the deprecated package and
    the `overrides` workaround.
-7. **Game names in the prompt** instead of the ids, so decline messages read "Magic Maze" rather than `magic-maze`.
+6. **Game names in the prompt** instead of the ids, so decline messages read "Magic Maze" rather than `magic-maze`.
+7. **Shorter tool output**, the remaining latency idea now that the model is non-reasoning (2026-11-01) and the
+   answer streams (2026-11-02): the wait that is left is the tool calls before the first word.

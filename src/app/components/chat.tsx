@@ -1,7 +1,9 @@
 "use client";
 
-// the chat page: start screen with game tiles, then the conversation; talks to /api/chat
+// the chat page: start screen with game tiles, then the conversation; talks to /api/chat and shows each answer
+// while it is being written (the route streams events, see src/lib/chat-events.ts)
 import { useEffect, useRef, useState } from "react";
+import { readEvents } from "../../lib/chat-events";
 import type { ChatMessage, ChatResponse } from "../../lib/chat-types";
 import { GAME_NAMES, GAMES, type Game } from "../../lib/games";
 import { Sources, ToolResultCard } from "./answer-extras";
@@ -10,6 +12,11 @@ import { ArrowUpIcon, BookIcon, CalculatorIcon, DiceIcon, PeopleIcon, PlusIcon, 
 
 // a turn is a chat message; assistant turns also carry what the UI shows under the answer
 type Turn = ChatMessage & Partial<Pick<ChatResponse, "sources" | "toolResults">>;
+
+// an answer while it is being written: no signature yet, the server sends that with the finished answer
+type Draft = Pick<ChatResponse, "answer" | "sources" | "toolResults">;
+
+const EMPTY_DRAFT: Draft = { answer: "", sources: [], toolResults: [] };
 
 const EXAMPLES = [
   { icon: <PeopleIcon />, text: "We are 3 players and have 2 hours. What can we play?" },
@@ -31,8 +38,39 @@ function toChatMessage(turn: Turn): ChatMessage {
     : { role: "assistant", content: turn.content, signature: turn.signature };
 }
 
+function WaitingLine({ text }: { text: string }) {
+  return (
+    <div className="flex items-center gap-2.5 text-sm font-semibold text-muted">
+      <SpinnerIcon size={16} className="text-accent" />
+      <span>{text}</span>
+    </div>
+  );
+}
+
+// an answer: the text, one card per tool result, the collapsed sources. while the answer is still being written,
+// a cursor follows the text, and before the first word arrives a waiting line stands in for it
+function AnswerBubble({ answer, sources, toolResults, writing = false }: Draft & { writing?: boolean }) {
+  return (
+    <div className="glass bubble-bot flex max-w-[620px] flex-col gap-3.5 self-start rounded-[18px] rounded-bl-[4px] px-4.5 py-4 leading-relaxed">
+      {answer || !writing ? (
+        <p className="m-0 whitespace-pre-wrap">
+          {answer}
+          {writing && <span aria-hidden="true" className="ml-0.5 inline-block h-[1em] w-[2px] translate-y-[3px] animate-pulse bg-accent" />}
+        </p>
+      ) : (
+        <WaitingLine text={toolResults.length > 0 ? "Writing the answer…" : "Searching the rulebook…"} />
+      )}
+      {toolResults.map((toolResult, j) => (
+        <ToolResultCard key={j} toolResult={toolResult} />
+      ))}
+      <Sources sources={sources} />
+    </div>
+  );
+}
+
 export function Chat() {
   const [turns, setTurns] = useState<Turn[]>([]);
+  const [draft, setDraft] = useState<Draft | null>(null); // the answer being written, shown after the turns
   const [input, setInput] = useState("");
   const [lit, setLit] = useState(false); // input pulses once after a tile or example fills it
   const [pending, setPending] = useState(false);
@@ -44,8 +82,9 @@ export function Chat() {
   const started = turns.length > 0;
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [turns, pending]);
+    // smooth for a new turn, instant while the answer is streaming (one scroll per piece of text)
+    bottomRef.current?.scrollIntoView({ behavior: draft ? "auto" : "smooth" });
+  }, [turns, draft, pending]);
 
   function fillInput(value: string) {
     setInput(value);
@@ -87,14 +126,35 @@ export function Chat() {
         const body = await response.json().catch(() => ({}));
         throw new Error(body.error ?? `The server answered with status ${response.status}.`);
       }
-      const data: ChatResponse = await response.json();
+      if (!response.body) throw new Error("The server sent an empty answer.");
+
+      // the answer arrives as events: pieces of text, the tool results and sources as soon as the tools are done,
+      // and finally the finished answer with its signature, which replaces everything shown so far
+      let current = EMPTY_DRAFT;
+      let finished: ChatResponse | null = null;
+      for await (const event of readEvents(response.body)) {
+        if (event.type === "text") current = { ...current, answer: current.answer + event.text };
+        else if (event.type === "clear") current = { ...current, answer: "" };
+        else if (event.type === "tools") current = { ...current, sources: event.sources, toolResults: event.toolResults };
+        else if (event.type === "done") finished = event.response;
+        else throw new Error(event.error);
+        if (!finished) setDraft(current);
+      }
+      if (!finished) throw new Error("The answer was cut off.");
       setTurns([
         ...history,
-        { role: "assistant", content: data.answer, signature: data.signature, sources: data.sources, toolResults: data.toolResults },
+        {
+          role: "assistant",
+          content: finished.answer,
+          signature: finished.signature,
+          sources: finished.sources,
+          toolResults: finished.toolResults,
+        },
       ]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong.");
     } finally {
+      setDraft(null);
       setPending(false);
     }
   }
@@ -156,20 +216,17 @@ export function Chat() {
                     {turn.content}
                   </div>
                 ) : (
-                  <div key={i} className="glass bubble-bot flex max-w-[620px] flex-col gap-3.5 self-start rounded-[18px] rounded-bl-[4px] px-4.5 py-4 leading-relaxed">
-                    <p className="m-0 whitespace-pre-wrap">{turn.content}</p>
-                    {turn.toolResults?.map((toolResult, j) => (
-                      <ToolResultCard key={j} toolResult={toolResult} />
-                    ))}
-                    <Sources sources={turn.sources ?? []} />
-                  </div>
+                  <AnswerBubble key={i} answer={turn.content} sources={turn.sources ?? []} toolResults={turn.toolResults ?? []} />
                 ),
               )}
-              {pending && (
-                <div className="glass flex items-center gap-2.5 self-start rounded-[18px] rounded-bl-[4px] px-4 py-3 text-sm font-semibold text-muted">
-                  <SpinnerIcon size={16} className="text-accent" />
-                  <span>Searching the rulebook…</span>
-                </div>
+              {draft ? (
+                <AnswerBubble {...draft} writing />
+              ) : (
+                pending && (
+                  <div className="glass self-start rounded-[18px] rounded-bl-[4px] px-4 py-3">
+                    <WaitingLine text="Searching the rulebook…" />
+                  </div>
+                )
               )}
               {error && (
                 <div role="alert" className="self-start rounded-[18px] rounded-bl-[4px] border border-red-400/40 bg-red-400/10 px-4 py-3 text-sm">
