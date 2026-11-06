@@ -853,52 +853,6 @@ Findings:
   only to say it is not in the rulebook, which the script counts as a leak. The third run didn't quote it. The
   check is kept because it is cheap and the log makes the difference obvious; the answers are judged by reading.
 
-## Optional tasks
-
-From the sprint's optional list I did two easy, three medium and one hard task. Each one is described in the
-section it belongs to; this is the map.
-
-**Easy**
-
-- **Source citations in responses.** Every rule in an answer cites its page, and the collapsed "Sources" list
-  under the answer names game, section and page of every passage the search returned
-  (see [Chat UI](#chat-ui-srcapp)).
-- **Conversation history.** The whole conversation is kept in the browser and sent with every question, so
-  follow-ups keep the game (see [Chat UI](#chat-ui-srcapp)). The export half of that task is not done.
-
-**Medium**
-
-- **Protect the app against prompt injection.** The prompt rules (passages are reference text, never
-  instructions; never reveal the instructions), the strict request schema that rejects a smuggled `system` role,
-  the signed assistant turns that stop a client from writing the assistant's earlier speech, the prompt-leak
-  check on the finished answer, and the five security questions in `scripts/test-agent.ts`
-  (see [Security and error handling](#security-and-error-handling-srclibchat-schemats-srclibchat-errorsts)).
-- **Visualisation of tool call results.** One card per tool call under the answer: score results and picked
-  games as tables, setup facts as a list with their pages, the call's arguments in the card title
-  (`src/app/components/answer-extras.tsx`, see [Chat UI](#chat-ui-srcapp)).
-- **Rate limiting and API key management.** 20 questions per minute per client, a 429 with `Retry-After` for the
-  21st. The API key is read once at startup with a named error when it is missing, stays on
-  the server, is kept out of every error message, and the signing key for the assistant turns is derived from it,
-  so there is no second secret to manage
-  (see [Security and error handling](#security-and-error-handling-srclibchat-schemats-srclibchat-errorsts)).
-
-**Hard**
-
-- **Evaluation of the RAG system**, with my own scripts instead of RAGAs: retrieval on its own (hit rate in the
-  top 3), the query translation (rank of the expected section for the raw question, the agent's query and the
-  rewritten query), and the whole agent on a fixed question set, where the tool calls are checked automatically
-  and the answers by reading, with one table column per run so that every change can be compared with the runs
-  before it (see [Evaluation](#evaluation)). The answers are still judged by me, not by a model; an LLM-as-judge
-  run with DeepEval is the next step (see [Improvements](#improvements)).
-
-The evaluation also compares strategies with each other on the same questions: retrieval with and without the
-rewrite step, the agent with and without the score tools, and two models. These are offline comparisons recorded
-in the tables, not A/B testing in the running app, so I don't count them as that task.
-
-**Not done:** multi-model support (`CHAT_MODEL` switches the model for the whole server, the UI has no choice),
-knowledge base updates, authentication, token and cost display, conversation export, MCP in either direction,
-logging beyond the server's console, hybrid search, multi-language support, an analytics dashboard.
-
 ## Improvements
 
 In the order I would do them:
